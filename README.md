@@ -1,20 +1,25 @@
-# mpd-virt-macos-prl
+# mpd-virt-macos
 
-macOS host-side orchestrator for [mpd](https://github.com/mutms/mpd) that
-drives **Parallels Desktop Pro** to create and manage `mpd` VMs.
-The binary is called `mpd-virt`.
+macOS host-side orchestrator for [mpd](https://github.com/mutms/mpd).
+Creates and manages `mpd` VMs on the user's Mac. The binary is called
+`mpd-virt`.
 
 This is the Swift replacement for the bash scripts that previously lived
 under `setup/macos/` in the mpd repo.
 
+**Hypervisor backends.** Today the only backend is **Parallels Desktop
+Pro** (`prlctl`). The repo is structured so additional backends (UTM,
+VMware Fusion, …) can be added as plugins without forking — one repo
+per host OS, multiple hypervisor backends inside.
+
 ## Sibling repos (planned)
 
-- `mpd-virt-linux-kvm` — libvirt/KVM backend on Linux hosts.
-- `mpd-virt-windows-hyperv` — Hyper-V backend on Windows hosts.
+- `mpd-virt-linux` — Linux host (libvirt/KVM and possibly others).
+- `mpd-virt-windows` — Windows host (Hyper-V and possibly others).
 
-Each backend is its own self-contained Swift project with its own
-`mpd-virt` binary. No source sharing between them; small repos, simple
-builds.
+Each per-OS repo is its own self-contained Swift project with its own
+`mpd-virt` binary. No source sharing between repos; small repos, simple
+builds. Hypervisor variety lives *inside* each repo as plugins.
 
 ## Verbs
 
