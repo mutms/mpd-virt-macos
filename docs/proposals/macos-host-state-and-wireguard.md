@@ -1,7 +1,7 @@
 # Proposal: macOS host state model + WireGuard architecture
 
 Two intertwined architectural decisions for the `mpd-virt-macos`
-binary (lives in a separate repo) that drives mpd-machine VMs on
+binary (lives in a separate repo) that drives mpd VMs on
 Parallels Desktop Pro. They're proposed together because each one's
 design depends on the other:
 
@@ -58,7 +58,7 @@ Together they give the macOS host an end state where:
 │   │           ├── private
 │   │           ├── public
 │   │           ├── server.conf
-│   │           └── client.conf       # imported into WG.app as "mpd-machine-<octet>"
+│   │           └── client.conf       # imported into WG.app as "mpd-<NNN>"
 │   └── service/
 ├── current.env                       # MPD_VM_OCTET pointer (orchestrator bookkeeping)
 └── <octet>/
@@ -66,7 +66,7 @@ Together they give the macOS host an end state where:
                                       # (future: per-VM logs, cache)
 ```
 
-Inside any mpd-machine VM (Linux filesystem):
+Inside any mpd VM (Linux filesystem):
 
 ```
 ~/.mpd/                               ← in-VM state dir
@@ -88,7 +88,7 @@ VM is on a different filesystem and only exists in the VM.
 | `mpd-virt setup` | Reads/writes `~/.mpd-virt/conf/` (idempotent). Creates the per-VM `~/.mpd-virt/<octet>/` and `current.env` pointer. |
 | `mpd-virt uninstall` | Removes per-VM `~/.mpd-virt/<octet>/` and host-side networking. **Never** touches `~/.mpd-virt/conf/`. |
 | `rm -rf ~/.mpd-virt/conf/` | User's manual nuclear option. Resets identity completely; next `mpd-virt setup` regenerates. |
-| Recreate a VM at the same `<octet>` | `~/.mpd-virt/<octet>/env` is overwritten with the new VM's UUID + name snapshot. Reuses `~/.mpd-virt/conf/wireguard/machine/<octet>/` keys — WG.app tunnel still works. |
+| Recreate a VM at the same `<octet>` | `~/.mpd-virt/<octet>/env` is overwritten with the new VM's UUID + name snapshot. Reuses `~/.mpd-virt/conf/wireguard/<octet>/` keys — WG.app tunnel still works. |
 
 ## Part 2 — WireGuard architecture
 
@@ -119,7 +119,7 @@ WireGuard.app owns the route.
 
 **Two convergent paths to containers.** The SSH config block (see
 [`mpd-virt.md` §"SSH config block"](mpd-virt.md)) gives the user
-`ssh mpd-machine-<octet>-php` via ProxyJump through the VM's Parallels
+`ssh mpd-<NNN>-php` via ProxyJump through the VM's Parallels
 Shared static IP — that path works whether or not the WG tunnel is up.
 Meanwhile WG provides full IP-level reachability to `10.163.0.0/24` for
 everything else (browser HTTPS, ad-hoc TCP, port probes). Both work
@@ -151,14 +151,14 @@ calls `Keypair.loadOrGenerate(...)` for the Mac identity. Persisted at
 
 `machine/<octet>/{private,public,server.conf,client.conf}` is generated
 on first call per octet. Persisted at
-`~/.mpd-virt/conf/wireguard/machine/<octet>/`. Every subsequent call reuses.
+`~/.mpd-virt/conf/wireguard/<octet>/`. Every subsequent call reuses.
 
 ### Where private keys live (and don't)
 
 - **`mac.private`** lives at `~/.mpd-virt/conf/wireguard/mac.private` on
   the Mac. Mode `0600`. Never transits anywhere.
 - **`machine/<octet>/private`** (the VM's WG private key) lives at
-  `~/.mpd-virt/conf/wireguard/machine/<octet>/private` on the Mac. The
+  `~/.mpd-virt/conf/wireguard/<octet>/private` on the Mac. The
   full `server.conf` (which embeds that private key inline) is pushed
   into the VM by `mpd-virt` during provisioning as
   `~/.mpd/conf/wireguard/mpd0.conf`. The in-VM `mpd --setup` then
@@ -187,13 +187,13 @@ The split of responsibilities between mpd-virt (host) and mpd (in-VM):
 | Skip the WG step when no conf is present | — | yes (sandbox case) |
 
 The in-VM step is **gated by the presence of `~/.mpd/conf/wireguard/mpd0.conf`**.
-If the file isn't there (e.g. sandbox VM, or an mpd-machine VM where mpd-virt
+If the file isn't there (e.g. sandbox VM, or an mpd VM where mpd-virt
 hasn't pushed the config yet), the WG step is a clean no-op — `mpd --setup`
 prints "no wireguard config present, skipping" and moves on.
 
 ### Daily user flow (steady state)
 
-1. Host reboots. Parallels auto-resumes the active mpd-machine VM
+1. Host reboots. Parallels auto-resumes the active mpd VM
    (Parallels' default).
 2. User opens WireGuard.app, toggles the active tunnel on.
    **No password prompt** (WireGuard.app's system extension was
@@ -205,18 +205,18 @@ prints "no wireguard config present, skipping" and moves on.
 
 ### Recreation flow
 
-User deletes VM `mpd-machine-159` in Parallels, decides to recreate it
+User deletes VM `mpd-159` in Parallels, decides to recreate it
 from the template:
 
 1. `mpd-virt setup`, picks octet `159` again.
-2. Swift sees `~/.mpd-virt/conf/wireguard/machine/159/` exists → reuses the
+2. Swift sees `~/.mpd-virt/conf/wireguard/159/` exists → reuses the
    existing keypair + configs.
 3. Clones template, provisions, **scp's the existing `server.conf`** into
    the new VM as `~/.mpd/conf/wireguard/mpd0.conf`. The in-VM `mpd --setup`
    then apt-installs `wireguard`, installs that file to
    `/etc/wireguard/mpd0.conf` (mode 0600 root:root), and enables
    `wg-quick@mpd0`.
-4. **WireGuard.app's existing `mpd-machine-159` tunnel is untouched.** No
+4. **WireGuard.app's existing `mpd-159` tunnel is untouched.** No
    re-import needed. The new VM has the same WG identity as the one that
    was deleted.
 
@@ -225,10 +225,10 @@ VM is disposable; the WG keys are not.
 
 ### Switching between VMs
 
-User has two mpd-machine VMs (octets `155` and `156`) cloned from the
+User has two mpd VMs (octets `155` and `156`) cloned from the
 template:
 
-1. WireGuard.app shows `mpd-machine-155` and `mpd-machine-156` as two
+1. WireGuard.app shows `mpd-155` and `mpd-156` as two
    tunnels.
 2. Both claim Mac end `10.164.0.1`, so only one can be active.
 3. Toggling between them is the entire UX — no setup-script invocation,
@@ -258,7 +258,7 @@ The model is "the Mac is the trust origin; the VM is disposable":
 | mpd CA private key | Mac (`~/.mpd-virt/conf/caroot/`) | Can sign arbitrary `*.mpd.test` certs (name-constrained; limited blast radius) |
 | `mac.private` (WG) | Mac (`~/.mpd-virt/conf/wireguard/`) | Can impersonate the Mac to any peer that trusts it |
 | `machine/<octet>/private` (WG) | Mac (`~/.mpd-virt/conf/wireguard/`) + VM | Can impersonate that VM peer to the Mac. Briefly transits Mac in memory + over SSH during initial provisioning |
-| SSH private key | Mac (`~/.ssh/`) | Root in any mpd-machine VM (dev user has passwordless sudo) |
+| SSH private key | Mac (`~/.ssh/`) | Root in any mpd VM (dev user has passwordless sudo) |
 
 A Mac compromise gives you everything. The VM-side WG private key
 sitting on the Mac doesn't enlarge that — the SSH key already
@@ -280,7 +280,7 @@ private key is not on the VM (only the cert is), and SSH is one-way
   hypothetical `mpd-virt rotate-wireguard <octet>` verb would generate
   a new VM-side keypair, push it to the VM, rewrite `client.conf`,
   prompt the user to re-import. Not urgent.
-- **Inside the mpd-machine VM, does the in-VM `mpd --setup` need any
+- **Inside the mpd VM, does the in-VM `mpd --setup` need any
   awareness of the host's WireGuard?** Probably not — the VM doesn't
   care about the tunnel; it just hosts `wg-quick@mpd0` as a systemd
   service that's enabled by mpd-virt's provisioning step.

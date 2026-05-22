@@ -1,7 +1,7 @@
 // mpd-virt — Namespace root.
 //
 // macOS host-side orchestrator for mpd. Drives Parallels Desktop Pro to
-// create + manage mpd-machine VMs. Replaces the bash setup/macos/ tree
+// create + manage mpd VMs. Replaces the bash setup/macos/ tree
 // that used to live in the main mpd repo.
 //
 // Verb implementations live in matching files via extension:
@@ -14,7 +14,7 @@
 //   MpdVirt.Doctor    → Doctor.swift
 //   MpdVirt.WireGuard → WireGuard.swift
 //
-// Multi-VM model: any number of mpd-machine VMs can coexist and run
+// Multi-VM model: any number of mpd VMs can coexist and run
 // simultaneously. WireGuard.app's active tunnel determines which VM the
 // Mac's `*.mpd.test` traffic is currently routed to — there's no "current
 // VM" tracked on disk by mpd-virt.
@@ -57,10 +57,24 @@ enum MpdVirt {
     /// Service certificate dir: `~/.mpd-virt/conf/service/`.
     static var serviceCertDir: String { "\(confDir)/service" }
 
-    /// Per-VM bookkeeping dir for the given octet:
-    /// `~/.mpd-virt/<octet>/`. Removed by `mpd-virt delete <octet>`.
-    static func vmDir(octet: Int) -> String { "\(rootDir)/\(octet)" }
+    /// 3-digit string form of an octet (`"159"`, `"100"`, …). Same shape
+    /// used for VM names, host directories, SSH aliases, WG tunnel names.
+    static func vmId(octet: Int) -> String { String(format: "%03d", octet) }
 
-    /// Convention: VM name in Parallels is always `mpd-machine-<octet>`.
-    static func vmName(octet: Int) -> String { "mpd-machine-\(octet)" }
+    /// Per-VM bookkeeping dir: `~/.mpd-virt/<NNN>/`.
+    /// Removed by `mpd-virt delete <octet>`.
+    static func vmDir(octet: Int) -> String { "\(rootDir)/\(vmId(octet: octet))" }
+
+    /// Convention: VM name in Parallels is `mpd-<NNN>` (3-digit padded).
+    static func vmName(octet: Int) -> String { "mpd-\(vmId(octet: octet))" }
+
+    /// Per-VM WG keys + configs: `~/.mpd-virt/conf/wireguard/<NNN>/`.
+    static func wgVmDir(octet: Int) -> String {
+        "\(wireGuardDir)/\(vmId(octet: octet))"
+    }
+
+    /// Valid octet range for managed VMs. mpd-virt clamps to this so we
+    /// never collide with Parallels Shared's DHCP pool (1–99) or the
+    /// reserved broadcast/special addresses (>254).
+    static let managedOctetRange: ClosedRange<Int> = 100...254
 }

@@ -21,19 +21,19 @@ extension MpdVirt.Create {
                  \(MpdVirt.confDir)/:
                    - caroot/{rootCA.pem, rootCA-key.pem}    (first call only)
                    - wireguard/mac.{private,public}         (first call only)
-                   - wireguard/machine/\(octet)/{private,public,server.conf,client.conf}
+                   - wireguard/\(octet)/{private,public,server.conf,client.conf}
                      (first call per octet; reused on re-create at same octet)
               4. Trust CA in macOS System Keychain (idempotent).
               5. Refuse if Parallels already has a VM named '\(vmName)'.
-              6. Clone 'mpd-machine-template' as '\(vmName)'.
+              6. Clone 'mpd-template' as '\(vmName)'.
               7. Boot the VM and wait for SSH.
               8. Push CA + WG server.conf into the VM as
                  ~/.mpd/conf/{caroot/rootCA.pem, wireguard/mpd0.conf}.
-              9. Write ~/.mpd/conf/platform.env in the VM (MPD_PLATFORM=machine, …).
+              9. Write ~/.mpd/conf/platform.env in the VM (MPD_PLATFORM=managed, …).
              10. Kick `mpd --setup` over SSH inside the VM.
              11. Write ~/.mpd-virt/\(octet)/env with VM metadata
                  (UUID, IP, user) for diagnostics.
-             12. Import wireguard/machine/\(octet)/client.conf into
+             12. Import wireguard/\(octet)/client.conf into
                  WireGuard.app as '\(vmName)'.
              13. Write ~/.ssh/config entries for \(vmName) + the per-runtime
                  ProxyJump aliases (php / node / util).

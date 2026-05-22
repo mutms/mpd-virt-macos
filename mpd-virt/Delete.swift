@@ -1,6 +1,6 @@
 // mpd-virt — MpdVirt.Delete namespace
 //
-// Stub for `mpd-virt delete <octet>`. Removes a single mpd-machine VM
+// Stub for `mpd-virt delete <octet>`. Removes a single mpd VM
 // and its bookkeeping; preserves the persistent identity under
 // ~/.mpd-virt/conf/ so a later re-create at the same octet reuses the
 // same WG keys + CA.

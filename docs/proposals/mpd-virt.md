@@ -1,4 +1,4 @@
-# Proposal: `mpd-virt` — host-side binary for driving mpd-machine VMs
+# Proposal: `mpd-virt` — host-side binary for driving mpd VMs
 
 A new Swift binary that replaces the bash scripts under `setup/macos/lib/`,
 `setup/linux/lib/`, and `setup/windows/lib/`. **One binary name —
@@ -59,21 +59,21 @@ interested implementer doesn't have to re-derive it.
 ## VM identity model: octet as the canonical key
 
 `mpd-virt` uses the **last IP octet** as the canonical identifier for
-each mpd-machine VM throughout its storage layout:
+each mpd VM throughout its storage layout:
 
-- VM name in Parallels: `mpd-machine-<octet>`
+- VM name in Parallels: `mpd-<NNN>`
 - Static IP on Parallels Shared: `10.211.55.<octet>`
 - Host state dir: `~/.mpd-virt/<octet>/`
-- WG configs: `~/Developer/mpd/conf/wireguard/machine/<octet>/`
-- WG.app tunnel name: `mpd-machine-<octet>`
-- SSH config aliases: `mpd-machine-<octet>` and
-  `mpd-machine-<octet>-<runtime>`
+- WG configs: `~/Developer/mpd/conf/wireguard/<octet>/`
+- WG.app tunnel name: `mpd-<NNN>`
+- SSH config aliases: `mpd-<NNN>` and
+  `mpd-<NNN>-<runtime>`
 - `current.env`: `MPD_VM_OCTET=<octet>`
 
 One number, encoded everywhere, predictable and tab-completable.
 
 **Rule: do not rename mpd VMs in Parallels.** The whole storage
-layout assumes the Parallels VM name stays `mpd-machine-<octet>` for
+layout assumes the Parallels VM name stays `mpd-<NNN>` for
 its lifetime. Renaming in the Parallels GUI is explicitly
 unsupported. (To "rename" effectively: `mpd-virt clone <src>
 <new-octet>` to a new octet, then `mpd-virt uninstall <old-octet>`
@@ -83,11 +83,11 @@ to retire the original.)
 Parallels-issued UUID for each VM is stored in
 `~/.mpd-virt/<octet>/env` (as a `MPD_VM_UUID=...` line) so that
 `mpd-virt doctor` can verify "the VM currently named
-`mpd-machine-<octet>` in Parallels is still the one I provisioned"
+`mpd-<NNN>` in Parallels is still the one I provisioned"
 when investigating weirdness. But the day-to-day lookup path is
 **name → octet → IP**; UUID never gets touched in normal operation.
 This keeps `prlctl` invocations human-readable (`prlctl start
-mpd-machine-222`, not `prlctl start
+mpd-222`, not `prlctl start
 {abc12345-aaaa-bbbb-cccc-...}`) and makes log output much easier to
 follow.
 
@@ -114,7 +114,7 @@ the WSL filesystem.
 | `start` | `<vm>` | Boot the VM. If a different mpd-virt VM is running, suspend it first (one-running-at-a-time). Re-apply host networking to the new VM's IP. Updates `current.env`. Idempotent. |
 | `stop` | `<vm>` | Suspend the VM. With `--kill`, hard-stop. |
 | `ssh` | `<vm> [-- cmd …]` | SSH into the VM. With trailing args, run a one-shot command. |
-| `clone` | `<src-vm> <new-octet>` | Backend-native clone of an existing VM into a new `mpd-machine-<new-octet>` name. Writes `~/.mpd-virt/<new-octet>/env` (with the clone's new UUID recorded as diagnostic metadata). The clone is renamed in Parallels to match the new octet; the in-guest NetworkManager keyfile is rewritten to the new static IP before first boot. |
+| `clone` | `<src-vm> <new-octet>` | Backend-native clone of an existing VM into a new `mpd-<new-octet>` name. Writes `~/.mpd-virt/<new-octet>/env` (with the clone's new UUID recorded as diagnostic metadata). The clone is renamed in Parallels to match the new octet; the in-guest NetworkManager keyfile is rewritten to the new static IP before first boot. |
 
 The `<vm>` placeholder accepts either a friendly VM name or a UUID.
 Completion resolves to the *current* name for each tracked UUID,
@@ -182,44 +182,44 @@ Block shape (one per VM, written between the standard managed-block
 markers — same approach the existing bash uses):
 
 ```
-# >>> mpd-machine (managed by mpd-virt) >>>
-Host mpd-machine-<octet>
+# >>> mpd (managed by mpd-virt) >>>
+Host mpd-<NNN>
     HostName <vm-static-ip>
     User <dev-user>
     StrictHostKeyChecking no
 
-Host mpd-machine-<octet>-php
+Host mpd-<NNN>-php
     HostName php.runtime.mpd.test
     User user
-    ProxyJump mpd-machine-<octet>
+    ProxyJump mpd-<NNN>
     StrictHostKeyChecking no
 
-Host mpd-machine-<octet>-node
+Host mpd-<NNN>-node
     HostName node.runtime.mpd.test
     User user
-    ProxyJump mpd-machine-<octet>
+    ProxyJump mpd-<NNN>
     StrictHostKeyChecking no
 
-Host mpd-machine-<octet>-util
+Host mpd-<NNN>-util
     HostName util.runtime.mpd.test
     User user
-    ProxyJump mpd-machine-<octet>
+    ProxyJump mpd-<NNN>
     StrictHostKeyChecking no
-# <<< mpd-machine <<<
+# <<< mpd <<<
 ```
 
 User-visible UX:
 
-- `ssh mpd-machine-222` — direct SSH to the VM (uses Parallels Shared
+- `ssh mpd-222` — direct SSH to the VM (uses Parallels Shared
   IP `10.211.55.222`, no tunnel needed).
-- `ssh mpd-machine-222-php` — SSH into the php runtime, automatically
+- `ssh mpd-222-php` — SSH into the php runtime, automatically
   ProxyJumping through the VM. `<runtime>.runtime.mpd.test` resolves
   via the VM's dnsmasq during the inner hop.
-- `ssh mpd-machine-222-node`, `ssh mpd-machine-222-util` — same
+- `ssh mpd-222-node`, `ssh mpd-222-util` — same
   pattern.
 - PHPStorm Gateway / VSCode Remote-SSH point at these Host aliases
   directly; the ProxyJump is transparent.
-- `scp mpd-machine-222-php:/srv/projects/foo/bar.txt .` works.
+- `scp mpd-222-php:/srv/projects/foo/bar.txt .` works.
 
 **Independent of WireGuard, but not exclusive:**
 
@@ -232,8 +232,8 @@ IP-level path to every container in `10.163.0.0/24` via the tunnel
 if anyone wants it (direct-by-IP SSH, browser HTTPS, ad-hoc TCP).
 Two convergent paths, both supported, no scope-narrowing on WG.
 
-- WG tunnel off + VM running → `ssh mpd-machine-222` and
-  `ssh mpd-machine-222-php` both work (via ProxyJump + Parallels
+- WG tunnel off + VM running → `ssh mpd-222` and
+  `ssh mpd-222-php` both work (via ProxyJump + Parallels
   Shared). Browser to `https://*.mpd.test/` does not.
 - WG tunnel on + VM running → both SSH-via-ProxyJump and IP-level
   paths (HTTPS browser, direct-by-IP container access) are
@@ -266,17 +266,17 @@ in-VM mpd (the existing Linux Swift binary) uses
 `Mpd.Environment.Machine.MachineActionSetup.deriveInstanceSuffix()` to
 name runtime containers like `mpd-runtime-<runtime>-<suffix>` (e.g.
 `mpd-runtime-php-222`). After this proposal lands, the user typing
-`ssh mpd-machine-222-php` would land inside a container whose
+`ssh mpd-222-php` would land inside a container whose
 internal hostname is `mpd-runtime-php-222` — same VM, different word
 order, mildly confusing in a terminal with several tabs open.
 
 **Required alignment**: change the in-VM runtime-naming convention from
-`mpd-runtime-<runtime>-<suffix>` to `mpd-machine-<octet>-<runtime>`,
+`mpd-runtime-<runtime>-<suffix>` to `mpd-<NNN>-<runtime>`,
 matching the SSH alias exactly. Concretely:
 
-- Same prefix as the VM (`mpd-machine-`) rather than the
+- Same prefix as the VM (`mpd-`) rather than the
   runtime-specific `mpd-runtime-` — emphasizes that the runtime is
-  *in* a specific mpd-machine VM, not a free-standing thing.
+  *in* a specific mpd VM, not a free-standing thing.
 - Octet before runtime — matches IP encoding and SSH-config word
   order.
 - DNS names inside the VM (`php.runtime.mpd.test` and friends) stay
@@ -287,9 +287,9 @@ matching the SSH alias exactly. Concretely:
 Swift), specifically wherever podman is invoked to create runtime
 containers with `--hostname <…>`. The function that builds that
 hostname template is the one to update — replacing the
-`deriveInstanceSuffix`-based shape with an `mpd-machine-<octet>-<runtime>`
+`deriveInstanceSuffix`-based shape with an `mpd-<NNN>-<runtime>`
 shape. `<octet>` comes from the VM's own hostname (the VM is named
-`mpd-machine-<octet>`, so reading `/etc/hostname` and splitting on the
+`mpd-<NNN>`, so reading `/etc/hostname` and splitting on the
 last `-` gives the octet).
 
 **Sequencing**: this in-VM change is independent of `mpd-virt` itself,
@@ -460,13 +460,13 @@ This is the only backend gated as mandatory.
 
 | Verb | prlctl invocation |
 |---|---|
-| `list` | `prlctl list -a -o uuid,status,name --no-header` (UUID column read for diagnostic stash + drift detection; the canonical lookup key is the name `mpd-machine-<octet>`) |
-| `status` | `prlctl status mpd-machine-<octet>` |
-| `start` | `prlctl start mpd-machine-<octet>` |
-| `stop` (suspend) | `prlctl suspend mpd-machine-<octet>` |
-| `stop --kill` | `prlctl stop mpd-machine-<octet> --kill` |
-| `clone` | `prlctl clone mpd-machine-<src-octet> --name mpd-machine-<new-octet>` (full clone; linked is a future flag) |
-| `delete` | `prlctl delete mpd-machine-<octet>` |
+| `list` | `prlctl list -a -o uuid,status,name --no-header` (UUID column read for diagnostic stash + drift detection; the canonical lookup key is the name `mpd-<NNN>`) |
+| `status` | `prlctl status mpd-<NNN>` |
+| `start` | `prlctl start mpd-<NNN>` |
+| `stop` (suspend) | `prlctl suspend mpd-<NNN>` |
+| `stop --kill` | `prlctl stop mpd-<NNN> --kill` |
+| `clone` | `prlctl clone mpd-<src-octet> --name mpd-<new-octet>` (full clone; linked is a future flag) |
+| `delete` | `prlctl delete mpd-<NNN>` |
 
 **Networking**: Parallels Shared network (`10.211.55.0/24`), DHCP pinned
 to `.1–.99` by the template builder, mpd VMs take static IPs from
@@ -474,7 +474,7 @@ to `.1–.99` by the template builder, mpd VMs take static IPs from
 during provisioning.
 
 **Template**: user pre-builds a Parallels VM template named
-`mpd-machine-template` (Debian Trixie + GNOME + Parallels Tools +
+`mpd-template` (Debian Trixie + GNOME + Parallels Tools +
 sandbox take-over already run). `mpd-virt setup` clones from this
 template.
 
@@ -494,11 +494,11 @@ Same verbs, libvirt backend. `prlctl` swaps for `virsh`:
 | Verb | virsh invocation |
 |---|---|
 | `list` | `virsh list --all --name` (with `virsh dominfo` per VM to read UUID for diagnostic stash) |
-| `status` | `virsh domstate mpd-machine-<octet>` |
-| `start` | `virsh start mpd-machine-<octet>` |
-| `stop` (suspend) | `virsh suspend mpd-machine-<octet>` (or `managedsave`) |
-| `stop --kill` | `virsh destroy mpd-machine-<octet>` |
-| `clone` | `virt-clone --original mpd-machine-<src-octet> --name mpd-machine-<new-octet> --auto-clone` |
+| `status` | `virsh domstate mpd-<NNN>` |
+| `start` | `virsh start mpd-<NNN>` |
+| `stop` (suspend) | `virsh suspend mpd-<NNN>` (or `managedsave`) |
+| `stop --kill` | `virsh destroy mpd-<NNN>` |
+| `clone` | `virt-clone --original mpd-<src-octet> --name mpd-<new-octet> --auto-clone` |
 
 **Networking**: libvirt default network (`virbr0`, typically
 `192.168.122.0/24`). Static IP pinned in-guest via NetworkManager

@@ -28,7 +28,7 @@ struct MpdVirtCLI: ParsableCommand {
 struct CreateCmd: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "create",
-        abstract: "Clone the Parallels template into a new mpd-machine-<octet> VM and provision it."
+        abstract: "Clone the Parallels template into a new mpd-<NNN> VM and provision it."
     )
 
     @Argument(help: "Last IP octet on the Parallels Shared network (e.g. 155). Becomes the VM name suffix.")
@@ -40,7 +40,7 @@ struct CreateCmd: ParsableCommand {
 struct DeleteCmd: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "delete",
-        abstract: "Delete an mpd-machine-<octet> VM. Removes ~/.mpd-virt/<octet>/ and drops SSH config block; preserves ~/.mpd-virt/conf/."
+        abstract: "Delete an mpd-<NNN> VM. Removes ~/.mpd-virt/<octet>/ and drops SSH config block; preserves ~/.mpd-virt/conf/."
     )
 
     @Argument(help: "Octet identifying the VM (e.g. 155).")
@@ -55,7 +55,7 @@ struct DeleteCmd: ParsableCommand {
 struct StartCmd: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "start",
-        abstract: "Start an mpd-machine-<octet> VM (prlctl start)."
+        abstract: "Start an mpd-<NNN> VM (prlctl start)."
     )
 
     @Argument(help: "Octet identifying the VM.")
@@ -67,7 +67,7 @@ struct StartCmd: ParsableCommand {
 struct StopCmd: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "stop",
-        abstract: "Suspend an mpd-machine-<octet> VM. With --kill, hard-stop."
+        abstract: "Suspend an mpd-<NNN> VM. With --kill, hard-stop."
     )
 
     @Argument(help: "Octet identifying the VM.")
@@ -82,7 +82,7 @@ struct StopCmd: ParsableCommand {
 struct ListCmd: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "list",
-        abstract: "List every tracked mpd-machine VM with its current Parallels state."
+        abstract: "List every tracked mpd VM with its current Parallels state."
     )
 
     func run() throws { try MpdVirt.List.run() }

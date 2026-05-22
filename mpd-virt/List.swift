@@ -15,8 +15,8 @@ extension MpdVirt.List {
             Planned columns:
 
               OCTET   NAME                  STATE      IP                UUID
-              155     mpd-machine-155       running    10.211.55.155     <uuid>
-              156     mpd-machine-156       stopped    10.211.55.156     <uuid>
+              155     mpd-155       running    10.211.55.155     <uuid>
+              156     mpd-156       stopped    10.211.55.156     <uuid>
               …
 
             Data sources:
