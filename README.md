@@ -49,15 +49,29 @@ The 3-digit octet `NNN` is the canonical key for every VM (name `mpd-<NNN>`, sta
 bootstrap pipeline against the copy. Build the template once, clone
 from it as many times as you want.
 
-The template-VM build steps (Debian Trixie + GNOME + Parallels Tools,
-hostname rules, "Convert to Template") are documented in the sibling
-mpd repo at
-[`setup/macos/README.md` → "VM template preparation"](https://github.com/mutms/mpd/blob/main/setup/macos/README.md#vm-template-preparation).
-Name your VM `mpd-template-<suffix>` (e.g. `mpd-template-trixie`); the
-bootstrap's hostname gate also accepts `mpd-sandbox-<suffix>`.
+Build the template:
 
-Two mpd-virt-specific steps that aren't in that doc — run both **from
-your Mac terminal**, against the template VM, before the first clone:
+1. **Configure Parallels Desktop Pro Shared network** to use
+   `10.211.55.1–99` as its DHCP range (Preferences → Network → Shared
+   → "Provide IP addresses via DHCP" → upper bound 99). mpd VMs take
+   static IPs from `.100+`, so they never collide with DHCP guests.
+2. **Install Debian Trixie (13)** in a new Parallels VM: Debian desktop
+   environment, GNOME, SSH server, standard system utilities.
+3. **Install Parallels Tools** (Actions → Install Parallels Tools, or
+   `sudo bash /media/cdrom/installer/install-cli.sh -i` from a guest
+   terminal if the GUI path doesn't run).
+4. **Name the VM** `mpd-template-<suffix>` (e.g. `mpd-template-trixie`).
+   The bootstrap's hostname gate also accepts `mpd-sandbox-<suffix>`.
+5. **Convert to Template** in Parallels: File → Convert to Template
+   (optional — full clones from a regular VM work too).
+
+The bootstrap pipeline (`mpd-virt setup` runs it automatically after
+`clone`) handles the rest — converting NetworkManager → systemd-networkd,
+pinning the static IP, installing the runtime stack, building `mpd`,
+and running `mpd --setup`. No "sandbox take-over" step is needed.
+
+Then run two mpd-virt-specific commands **from your Mac terminal**,
+against the template VM, before the first clone:
 
 1. **Authorize your SSH key on the VM** (one-time; you'll be prompted
    for the VM user's password):
