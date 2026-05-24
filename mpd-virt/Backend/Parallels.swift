@@ -204,13 +204,73 @@ extension MpdVirt.Parallels {
             identifier = found.uuid
         }
 
-        // Idempotency: skip if already named correctly.
+        // Idempotency: skip if already named correctly. The JSON
+        // returned by `prlctl list -i -j` uses CAPITALIZED keys, so
+        // the field is "Name", not "name".
         if let info = try? info(target: identifier),
-           let currentName = info["name"] as? String,
+           let currentName = info["Name"] as? String,
            currentName == targetName {
             return
         }
+
+        // `prlctl set --name` is refused while the VM is running. Try
+        // the cheap path first — if Parallels' guest-hostname auto-sync
+        // already did the rename, or the VM happens to be off, this
+        // succeeds and we're done.
+        do {
+            try prl(["set", identifier, "--name", targetName])
+            return
+        } catch let MpdVirt.BackendError.other(msg) where isBusyRunningError(msg) {
+            // Fall through to suspend → rename → resume.
+        }
+
+        // Deterministic path: suspend, rename, resume. Suspend keeps
+        // the in-memory state so the subsequent bootstrap steps (apt
+        // / make / mpd --setup) resume against the same kernel
+        // session — much faster than a stop/start cycle.
+        FileHandle.standardError.write(Data("""
+              ▸ Parallels refuses to rename a running VM. Suspending → rename → resume…
+                (≈10–20s; bootstrap continues once the VM is back up.)
+
+            """.utf8))
+        try prl(["suspend", identifier])
         try prl(["set", identifier, "--name", targetName])
+        try prl(["start", identifier])
+
+        // Wait for the VM to be ICMP-reachable again so the next
+        // bootstrap step doesn't hit a still-resuming kernel.
+        if !waitForPing(ip: canonicalIP, timeoutSeconds: 60) {
+            FileHandle.standardError.write(Data("""
+                  ⚠ Renamed to '\(targetName)' but \(canonicalIP) didn't respond to ICMP within 60s.
+                    The next bootstrap step may fail; if so, re-run `mpd-virt setup`.
+
+                """.utf8))
+        }
+    }
+
+    /// True iff a prlctl error message indicates the VM is busy or
+    /// running and the operation must wait. Substring-matches the
+    /// English error text Parallels returns; covers both wordings
+    /// observed in the wild.
+    private static func isBusyRunningError(_ msg: String) -> Bool {
+        msg.contains("virtual machine is busy")
+            || msg.contains("virtual machine is currently running")
+    }
+
+    /// Poll `/sbin/ping -c 1` until the host responds or the deadline
+    /// passes. Each ping attempt is itself bounded at 2s so we don't
+    /// spin forever waiting on a single slow round-trip.
+    private static func waitForPing(ip: String, timeoutSeconds: Int) -> Bool {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        while Date() < deadline {
+            let r = MpdVirt.Host.Ssh.runWithTimeout(
+                argv: ["/sbin/ping", "-c", "1", "-W", "1000", "-t", "2", ip],
+                timeoutSeconds: 2.0
+            )
+            if r.exitCode == 0 && !r.timedOut { return true }
+            Thread.sleep(forTimeInterval: 2)
+        }
+        return false
     }
 
     // MARK: - diag printRegistry extras
