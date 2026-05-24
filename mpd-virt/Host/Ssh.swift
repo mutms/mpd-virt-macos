@@ -163,17 +163,15 @@ extension MpdVirt.Host.Ssh {
         return !r.stdout.contains("no identities")
     }
 
-    /// Ensure key-based SSH auth works against `target`:
-    ///   1. Verify the Mac has a usable identity (key file or agent).
-    ///      Missing → error with an `ssh-keygen` hint.
-    ///   2. Probe `target` with BatchMode. Already works → return.
-    ///   3. Probe failed → run `ssh-copy-id` with full stdio
-    ///      inheritance so the user's terminal handles the host-key
-    ///      confirmation + password prompt directly (sshd writes the
-    ///      "password:" line via /dev/tty in noecho mode; the child
-    ///      Process inherits the controlling terminal so this works
-    ///      cleanly). Re-probe after — and only if THAT fails do we
-    ///      fall back to "go run it yourself" with the exact command.
+    /// Ensure key-based SSH auth works against `target`.
+    ///
+    /// We can't reliably run ssh-copy-id from Foundation Process —
+    /// the child needs controlling-terminal access for the password
+    /// prompt and we don't have a clean way to hand that over (see
+    /// Apple DTS forums thread 688534 + Swift Forums "Swift Process
+    /// with Pseudo Terminal"). So the dev runs the one-line command
+    /// in another terminal window while we wait — when they hit
+    /// Enter we re-probe and continue.
     static func ensureKeyAuth(_ target: Target) throws {
         let identityFile = defaultIdentityFile()
         let agentReady = sshAgentHasIdentity()
@@ -195,74 +193,44 @@ extension MpdVirt.Host.Ssh {
 
         if reachable(target) { return }
 
-        // Run ssh-copy-id with inherited stdio. The child opens
-        // /dev/tty for the password prompt; macOS's terminal handles
-        // noecho on its own. We don't pass --batch / --no-prompt — we
-        // WANT the host-key and password prompts to surface here.
+        let keyHint = identityFile.map { " -i \($0).pub" } ?? ""
         FileHandle.standardError.write(Data("""
 
               ▸ SSH key isn't authorized on \(target.sshTarget) yet.
-                Running ssh-copy-id — you'll be asked for the VM's password once.
-
-            """.utf8))
-
-        var copyArgv = ["/usr/bin/ssh-copy-id"]
-        if let key = identityFile {
-            copyArgv += ["-i", "\(key).pub"]
-        }
-        copyArgv += ["-o", "StrictHostKeyChecking=accept-new"]
-        copyArgv += [target.sshTarget]
-
-        // Wrap in /usr/bin/script (BSD on macOS) which allocates a
-        // fresh pseudo-terminal and runs the child inside it. Same
-        // trick we use for the bootstrap stream call: Foundation's
-        // Process inherits fds but not a "real" controlling
-        // terminal — and ssh-copy-id's internal `cat | ssh` pipeline
-        // wants one for the password prompt path (ssh does tcsetattr
-        // on its local side when prompting). Inside script's PTY,
-        // ssh sees a proper TTY and works the same as if you typed
-        // ssh-copy-id at your own shell.
-        //
-        // script syntax (BSD): `script -q <typescript_file> <cmd> [args]`.
-        // -q suppresses the start/end banner; /dev/null discards the
-        // typescript log.
-        let argv = ["/usr/bin/script", "-q", "/dev/null"] + copyArgv
-
-        MpdVirt.Debug.log("run interactive: \(argvForLog(argv))")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: argv[0])
-        process.arguments = Array(argv.dropFirst())
-        process.standardInput  = FileHandle.standardInput
-        process.standardOutput = FileHandle.standardOutput
-        process.standardError  = FileHandle.standardError
-        try process.run()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            // ssh-copy-id failed (wrong password, ssh service down,
-            // etc.). Fall back to "go run it yourself" with the exact
-            // command — the dev can debug from there.
-            let keyHint = identityFile.map { " -i \($0).pub" } ?? ""
-            throw MpdVirt.BackendError.other("""
-                ssh-copy-id failed (exit \(process.terminationStatus)). Run it manually:
+                Open ANOTHER terminal window and run:
 
                     ssh-copy-id\(keyHint) \(target.sshTarget)
 
-                Then re-run `mpd-virt setup` — it'll continue from here.
-                """)
+                You'll be asked for the VM's password. When ssh-copy-id finishes,
+                come back here and press Enter — I'll re-test and continue.
+
+            """.utf8))
+        FileHandle.standardError.write(Data(
+            "    Press Enter when ssh-copy-id is done (Ctrl-C to abort): ".utf8
+        ))
+
+        // Wait for Enter (or EOF / Ctrl-D = abort).
+        guard readLine() != nil else {
+            throw MpdVirt.BackendError.other("aborted — no input received.")
         }
 
-        // Re-verify with BatchMode — catches the case where
-        // ssh-copy-id "succeeds" but the key landed with wrong owner
-        // / mode on the VM (sshd rejects group-readable
-        // authorized_keys / world-readable home).
-        guard reachable(target) else {
-            throw MpdVirt.BackendError.other("""
-                ssh-copy-id reported success but BatchMode SSH still fails.
-                Check on the VM that the dev user owns ~/.ssh (700) and
-                ~/.ssh/authorized_keys (600), and that sshd allows pubkey auth.
-                """)
+        if reachable(target) {
+            FileHandle.standardError.write(Data(
+                "  ✓ SSH key auth now works — continuing.\n".utf8
+            ))
+            return
         }
+
+        throw MpdVirt.BackendError.other("""
+            SSH key still not authorized on \(target.sshTarget).
+            Sanity-check the manual run:
+
+                ssh -o BatchMode=yes\(keyHint) \(target.sshTarget) true
+
+            If that fails, check on the VM that the dev user owns ~/.ssh (700)
+            and ~/.ssh/authorized_keys (600), and that sshd allows pubkey auth.
+            Then re-run `mpd-virt setup`.
+            """)
     }
 
     // MARK: - Streaming / interactive exec
