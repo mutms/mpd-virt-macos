@@ -139,79 +139,26 @@ extension MpdVirt.CloudInit {
         return canonicalRawPath
     }
 
-    /// Copy the cached raw to `destPath` and sparse-extend it to
-    /// `targetGiB`. Refuses to shrink (`dd seek=` only grows). Throws
-    /// when the target is smaller than the source. The copy is a plain
-    /// byte-for-byte cp; the extend is `dd if=/dev/zero count=0 seek=<bytes>`
-    /// — the trailing seek creates a sparse file, so we don't physically
-    /// allocate the extra space on disk.
-    static func materializePerVMDisk(destPath: String, targetGiB: Int) throws {
-        try ensureBaseRawImage()
-
-        let parent = (destPath as NSString).deletingLastPathComponent
-        if !parent.isEmpty {
-            try FileManager.default.createDirectory(
-                at: URL(fileURLWithPath: parent), withIntermediateDirectories: true
-            )
-        }
-
-        // Refuse to clobber. Caller is responsible for cleaning up
-        // failed-creates before retry.
-        if FileManager.default.fileExists(atPath: destPath) {
-            throw Failure.ioFailed("destination disk already exists: \(destPath)")
-        }
-
-        FileHandle.standardError.write(Data("  ▶ copying base disk → \(destPath) …\n".utf8))
-        let cp = try MpdVirt.Host.Ssh.runProcess(argv: ["/bin/cp", canonicalRawPath, destPath])
-        if !cp.ok {
-            throw Failure.ioFailed("cp \(canonicalRawPath) → \(destPath) failed (exit \(cp.exitCode)).")
-        }
-
-        // Check source size against target before extending.
-        let attrs = try FileManager.default.attributesOfItem(atPath: destPath)
-        let currentBytes = (attrs[.size] as? Int) ?? 0
-        let targetBytes = targetGiB * 1024 * 1024 * 1024
-        if targetBytes < currentBytes {
-            try? FileManager.default.removeItem(atPath: destPath)
-            throw Failure.ioFailed("""
-                requested disk size \(targetGiB) GB is smaller than the cloud image \
-                (\(currentBytes / (1024*1024*1024)) GB). Pick a larger --vm-disk.
-                """)
-        }
-
-        if targetBytes > currentBytes {
-            FileHandle.standardError.write(Data("  ▶ growing disk to \(targetGiB) GB (sparse) …\n".utf8))
-            // `dd if=/dev/zero of=<f> bs=1 count=0 seek=<bytes>` extends
-            // the file by seeking — no data written, the OS materializes
-            // a sparse hole.
-            let dd = try MpdVirt.Host.Ssh.runProcess(argv: [
-                "/bin/dd", "if=/dev/zero", "of=\(destPath)",
-                "bs=1", "count=0", "seek=\(targetBytes)"
-            ])
-            if !dd.ok {
-                throw Failure.ioFailed("dd resize failed (exit \(dd.exitCode)).")
-            }
-        }
-    }
-
     // MARK: - Public: cidata ISO
 
     /// Generate a NoCloud cidata seed ISO at `outputPath`. The VM picks
     /// it up at first boot, creates the dev user with `sshPubKey`, grows
     /// the rootfs to fill the disk we just extended, and starts sshd.
     ///
-    /// We intentionally **do not** emit `network-config`: the VM boots
-    /// on DHCP from Parallels Shared and `30-networking.sh` later pins
-    /// the canonical static IP. Matches the clone-from-template flow so
-    /// there's one networking code path.
-    ///
     /// `localHostname` is the temporary hostname cloud-init sets. The
     /// bootstrap renames it to `mpd-<NNN>` when step 30 runs.
+    ///
+    /// `networkConfig`, if provided, becomes the cidata's
+    /// `network-config` file (cloud-init v2 ethernets/etc.). UTM uses
+    /// this to pin the canonical static IP from boot one — bypasses the
+    /// DHCP→step-30 dance the clone flow needs. Pass nil to omit the
+    /// file entirely (cloud-init falls back to DHCP).
     static func makeCidataISO(
         outputPath: String,
         username: String,
         sshPubKey: String,
-        localHostname: String
+        localHostname: String,
+        networkConfig: String? = nil
     ) throws {
         let workDir = NSTemporaryDirectory() + "mpd-virt-cidata-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(atPath: workDir) }
@@ -263,6 +210,13 @@ extension MpdVirt.CloudInit {
             toFile: "\(workDir)/user-data",
             atomically: true, encoding: .utf8
         )
+
+        if let networkConfig = networkConfig {
+            try networkConfig.write(
+                toFile: "\(workDir)/network-config",
+                atomically: true, encoding: .utf8
+            )
+        }
 
         // hdiutil makehybrid with volume label "cidata" — the NoCloud
         // datasource looks for exactly that label.

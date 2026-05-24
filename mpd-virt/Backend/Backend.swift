@@ -61,13 +61,16 @@ extension MpdVirt {
         var capabilities: Capabilities {
             switch self {
             case .parallels:
-                // Materialize via cloud-init seed ISO + Debian generic-
-                // cloud raw disk (CloudInit.swift), or clone from an
-                // existing template VM via `prlctl clone`.
-                return Capabilities(create: true, clone: true, lifecycle: true)
+                // Clone from an existing `mpd-template-<suffix>` VM via
+                // `prlctl clone`. Parallels Desktop's native template +
+                // snapshot UX is the right tool for "fresh VM from a
+                // known-good baseline" here; cloud-init create would be
+                // strictly inferior to a hand-built template.
+                return Capabilities(create: false, clone: true, lifecycle: true)
             case .utm:
-                // Initial scope: create via UTM's cloud-init seed-ISO
-                // flow. `clone` lands in a follow-up.
+                // Create via UTM's AppleScript dictionary + cloud-init
+                // seed ISO. Clone is a follow-up (UTM bundles don't
+                // template as cleanly as Parallels VMs do).
                 return Capabilities(create: true, clone: false, lifecycle: true)
             case .general:
                 // No hypervisor to drive. Only `setup` (and the

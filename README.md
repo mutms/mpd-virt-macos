@@ -43,6 +43,51 @@ The 3-digit octet `NNN` is the canonical key for every VM (name `mpd-<NNN>`, sta
 | `backend list` | — | Compiled-in backends + capabilities + default. |
 | `backend set-default` | `<name>` | Persist default backend to `~/.mpd-virt/conf/backend.env`. |
 
+### Building a Parallels template (for `clone`)
+
+`mpd-virt clone` duplicates an existing Parallels VM and runs the
+bootstrap pipeline against the copy. Build the template once, clone
+from it as many times as you want.
+
+The template-VM build steps (Debian Trixie + GNOME + Parallels Tools,
+hostname rules, "Convert to Template") are documented in the sibling
+mpd repo at
+[`setup/macos/README.md` → "VM template preparation"](https://github.com/mutms/mpd/blob/main/setup/macos/README.md#vm-template-preparation).
+Name your VM `mpd-template-<suffix>` (e.g. `mpd-template-trixie`); the
+bootstrap's hostname gate also accepts `mpd-sandbox-<suffix>`.
+
+Two mpd-virt-specific steps that aren't in that doc — run both **from
+your Mac terminal**, against the template VM, before the first clone:
+
+1. **Authorize your SSH key on the VM** (one-time; you'll be prompted
+   for the VM user's password):
+
+   ```
+   ssh-copy-id -i ~/.ssh/id_ed25519.pub USER@VM_IP
+   ```
+
+   Adjust the key path if you use a non-default identity. After this,
+   `ssh USER@VM_IP` should work without a password.
+
+2. **Enable passwordless sudo** for the dev user:
+
+   ```
+   ssh -t USER@VM_IP 'bash <(wget -qO- https://raw.githubusercontent.com/mutms/mpd/main/bootstrap/10-passwordless-sudo.sh)'
+   ```
+
+   The `-t` flag forces a remote PTY so the root password prompt uses
+   noecho — your password will NOT echo to the screen.
+
+If you skip either, `mpd-virt setup` will pause and print the exact
+command for you to run in another window before continuing — the
+template path just front-loads both.
+
+Then clone with:
+
+```
+mpd-virt clone 150 --template=mpd-template-trixie --username=USER --backend=parallels
+```
+
 ### Setup vs diag — division of labor
 
 - **`setup`** owns the VM. It establishes SSH, runs the bootstrap chain
