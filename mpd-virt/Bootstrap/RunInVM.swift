@@ -204,27 +204,55 @@ extension MpdVirt.Bootstrap.RunInVM {
     // MARK: - Pre-flight: passwordless sudo
 
     /// Verify the dev user already has passwordless sudo on the VM.
-    /// If not, refuse to continue — running `10-passwordless-sudo.sh`
-    /// would prompt for the root password through a non-PTY ssh,
-    /// causing the password to echo in plaintext.
+    /// If not, walk the dev through the one-shot manual setup —
+    /// print the `ssh -t … bash <(wget …)` line, wait for them to
+    /// run it in another terminal, re-probe and continue.
+    ///
+    /// Why not just run it ourselves: mpd-virt's ssh has no local PTY,
+    /// so the remote `su` would fall back to reading from stdin
+    /// without setting noecho — root password would echo in plaintext.
+    /// Same shape as `Ssh.ensureKeyAuth`'s manual ssh-copy-id path.
     private static func ensurePasswordlessSudo(_ target: MpdVirt.Host.Ssh.Target) throws {
         step(0, "probe: sudo -n true (does \(target.user) have passwordless sudo?)")
-        let r = try MpdVirt.Host.Ssh.exec(target, "sudo -n true 2>/dev/null")
-        if r.ok { return }
+        if (try? MpdVirt.Host.Ssh.exec(target, "sudo -n true 2>/dev/null"))?.ok == true { return }
+
+        FileHandle.standardError.write(Data("""
+
+              ▸ \(target.user)@\(target.host) doesn't have passwordless sudo yet.
+                Open ANOTHER terminal window and run:
+
+                    ssh -t \(target.user)@\(target.host) 'bash <(wget -qO- \(bootstrapBaseURL)/10-passwordless-sudo.sh)'
+
+                (The `-t` forces a remote PTY so the password prompt uses noecho —
+                your root password will NOT echo to the screen.)
+
+                When the script finishes, come back here and press Enter — I'll
+                re-test and continue.
+
+            """.utf8))
+        FileHandle.standardError.write(Data(
+            "    Press Enter when 10-passwordless-sudo.sh is done (Ctrl-C to abort): ".utf8
+        ))
+        guard readLine() != nil else {
+            throw MpdVirt.BackendError.other("aborted — no input received.")
+        }
+
+        // Re-probe.
+        if (try? MpdVirt.Host.Ssh.exec(target, "sudo -n true 2>/dev/null"))?.ok == true {
+            FileHandle.standardError.write(Data(
+                "  ✓ passwordless sudo works now — continuing.\n".utf8
+            ))
+            return
+        }
 
         throw MpdVirt.BackendError.other("""
-            \(target.user)@\(target.host) does not have passwordless sudo configured yet.
+            Passwordless sudo still not configured on \(target.user)@\(target.host).
+            Sanity-check the manual run:
 
-            mpd-virt can't run `bootstrap/10-passwordless-sudo.sh` over its own ssh
-            channel: there's no PTY in the pipe, so the remote `su` falls back to
-            reading from stdin without setting noecho — your root password would
-            echo in plaintext. Run it in YOUR shell with `ssh -t` (forces a remote
-            PTY so the noecho propagates back to your terminal):
+                ssh \(target.user)@\(target.host) 'sudo -n true'
 
-                ssh -t \(target.user)@\(target.host) 'bash <(wget -qO- \(bootstrapBaseURL)/10-passwordless-sudo.sh)'
-
-            Type the VM's root password when `su` prompts (it won't echo). Then
-            re-run `mpd-virt setup` and it'll continue from this point.
+            If that prints nothing and exits 0 it's working; otherwise re-run the
+            10-passwordless-sudo.sh line above. Then re-run `mpd-virt setup`.
             """)
     }
 
