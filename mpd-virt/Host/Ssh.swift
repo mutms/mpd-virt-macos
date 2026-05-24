@@ -167,18 +167,17 @@ extension MpdVirt.Host.Ssh {
     ///   1. Verify the Mac has a usable identity (key file or agent).
     ///      Missing → error with an `ssh-keygen` hint.
     ///   2. Probe `target` with BatchMode. Already works → return.
-    ///   3. Probe failed → throw with the exact `ssh-copy-id` command
-    ///      the user should run in their shell. We never try to drive
-    ///      ssh-copy-id from inside mpd-virt: its password prompt
-    ///      needs a real controlling terminal that `Process.run()`
-    ///      can't reliably hand over (and the password would echo in
-    ///      plaintext). Same shape as the sudo-trust hint at the end
-    ///      of setup — print it, don't run it.
+    ///   3. Probe failed → run `ssh-copy-id` with full stdio
+    ///      inheritance so the user's terminal handles the host-key
+    ///      confirmation + password prompt directly (sshd writes the
+    ///      "password:" line via /dev/tty in noecho mode; the child
+    ///      Process inherits the controlling terminal so this works
+    ///      cleanly). Re-probe after — and only if THAT fails do we
+    ///      fall back to "go run it yourself" with the exact command.
     static func ensureKeyAuth(_ target: Target) throws {
         let identityFile = defaultIdentityFile()
         let agentReady = sshAgentHasIdentity()
 
-        // Step 1 — must have SOMETHING usable on the Mac.
         if identityFile == nil && !agentReady {
             throw MpdVirt.BackendError.other("""
                 no SSH identity on this Mac. Create one before running setup:
@@ -194,19 +193,62 @@ extension MpdVirt.Host.Ssh {
                 """)
         }
 
-        // Step 2 — fast path: BatchMode probe.
         if reachable(target) { return }
 
-        // Step 3 — user has to ssh-copy-id manually.
-        let keyHint = identityFile.map { " -i \($0).pub" } ?? ""
-        throw MpdVirt.BackendError.other("""
-            SSH key not authorized on \(target.sshTarget) yet. In your shell, run:
+        // Run ssh-copy-id with inherited stdio. The child opens
+        // /dev/tty for the password prompt; macOS's terminal handles
+        // noecho on its own. We don't pass --batch / --no-prompt — we
+        // WANT the host-key and password prompts to surface here.
+        FileHandle.standardError.write(Data("""
 
-                ssh-copy-id\(keyHint) \(target.sshTarget)
+              ▸ SSH key isn't authorized on \(target.sshTarget) yet.
+                Running ssh-copy-id — you'll be asked for the VM's password once.
 
-            You'll be asked for the VM's password once. Then re-run
-            `mpd-virt setup` — it'll continue from here.
-            """)
+            """.utf8))
+
+        var argv = ["/usr/bin/ssh-copy-id"]
+        if let key = identityFile {
+            argv += ["-i", "\(key).pub"]
+        }
+        argv += ["-o", "StrictHostKeyChecking=accept-new"]
+        argv += [target.sshTarget]
+
+        MpdVirt.Debug.log("run interactive: \(argvForLog(argv))")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: argv[0])
+        process.arguments = Array(argv.dropFirst())
+        // Explicit stdio inheritance — the child gets our terminal.
+        process.standardInput  = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError  = FileHandle.standardError
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            // ssh-copy-id failed (wrong password, ssh service down,
+            // etc.). Fall back to "go run it yourself" with the exact
+            // command — the dev can debug from there.
+            let keyHint = identityFile.map { " -i \($0).pub" } ?? ""
+            throw MpdVirt.BackendError.other("""
+                ssh-copy-id failed (exit \(process.terminationStatus)). Run it manually:
+
+                    ssh-copy-id\(keyHint) \(target.sshTarget)
+
+                Then re-run `mpd-virt setup` — it'll continue from here.
+                """)
+        }
+
+        // Re-verify with BatchMode — catches the case where
+        // ssh-copy-id "succeeds" but the key landed with wrong owner
+        // / mode on the VM (sshd rejects group-readable
+        // authorized_keys / world-readable home).
+        guard reachable(target) else {
+            throw MpdVirt.BackendError.other("""
+                ssh-copy-id reported success but BatchMode SSH still fails.
+                Check on the VM that the dev user owns ~/.ssh (700) and
+                ~/.ssh/authorized_keys (600), and that sshd allows pubkey auth.
+                """)
+        }
     }
 
     // MARK: - Streaming / interactive exec
