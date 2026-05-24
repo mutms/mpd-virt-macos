@@ -238,40 +238,65 @@ extension MpdVirt.Parallels {
 
     // MARK: - locate
 
-    /// Setup's single discovery entry point for Parallels. Looks up
-    /// the VM named `mpd-<NNN>`; cross-checks `ipHint` when present.
+    /// Setup's single discovery entry point for Parallels. Two search
+    /// strategies in order:
     ///
-    /// Returns nil if Parallels isn't installed or no matching VM
-    /// exists (Setup converts that into a "pass --ip" error).
+    ///   1. **By canonical name** `mpd-<NNN>`. If the dev already
+    ///      renamed the Parallels VM (or `afterCanonicalIPReady` ran
+    ///      on a previous setup), this finds it. ipHint, if present,
+    ///      is cross-checked against the live Parallels-reported IP.
+    ///
+    ///   2. **By IP** (only when ipHint is provided). Scans the full
+    ///      `prlctl list -a -j` for any VM currently sitting at that
+    ///      IP. Catches the common adoption case: VM is still named
+    ///      `mpd-sandbox-2` (or whatever), bootstrap hasn't run yet,
+    ///      but the dev knows the IP.
+    ///
+    /// Returns nil if Parallels isn't installed or both strategies
+    /// fail (Setup converts that into a "pass --ip" error).
     static func locate(octet: Int, ipHint: String?) throws -> (ip: String, uuid: String?)? {
-        // Parallels not installed → can't locate. Returning nil lets
-        // setup fall through to its helpful error.
         guard FileManager.default.fileExists(atPath: prlctlPath) else { return nil }
 
         let targetName = MpdVirt.vmName(octet: octet)
-        guard let info = try? info(target: targetName),
-              let uuid = info["ID"] as? String
-        else { return nil }
 
-        guard let reportedIP = walkForSharedIP(info) else {
-            throw MpdVirt.BackendError.other("""
-                Parallels has a VM named '\(targetName)' but Parallels Tools \
-                aren't reporting an IP yet. Start the VM (or wait for it to \
-                finish booting) and re-run.
-                """)
+        // 1. By canonical name.
+        if let info = try? info(target: targetName),
+           let uuid = info["ID"] as? String {
+            guard let reportedIP = walkForSharedIP(info) else {
+                throw MpdVirt.BackendError.other("""
+                    Parallels has a VM named '\(targetName)' but Parallels Tools \
+                    aren't reporting an IP yet. Start the VM (or wait for it to \
+                    finish booting) and re-run.
+                    """)
+            }
+            if let hint = ipHint, hint != reportedIP {
+                FileHandle.standardError.write(Data("""
+                      ⚠ Parallels reports '\(targetName)' at \(reportedIP) but --ip=\(hint) was passed.
+                        Using --ip; mpd-virt will rename + re-IP through the bootstrap pipeline.
+
+                    """.utf8))
+                return (ip: hint, uuid: uuid)
+            }
+            return (ip: reportedIP, uuid: uuid)
         }
 
-        // Cross-check with --ip when both are available. Mismatch is
-        // a soft warning; we go with --ip since the caller was explicit.
-        if let hint = ipHint, hint != reportedIP {
-            FileHandle.standardError.write(Data("""
-                  ⚠ Parallels reports '\(targetName)' at \(reportedIP) but --ip=\(hint) was passed.
-                    Using --ip; mpd-virt will rename + re-IP through the bootstrap pipeline.
+        // 2. By IP (only when caller provided one). Finds VMs that
+        //    aren't yet renamed to the canonical form — the common
+        //    "adopt my hand-built VM" case.
+        if let hint = ipHint {
+            let vms = try listAllVMs()
+            if let found = vms.first(where: { $0.ip == hint }) {
+                FileHandle.standardError.write(Data("""
+                      ▸ Parallels VM '\(found.name)' is at \(hint) — adopting it as \(targetName).
+                        Bootstrap step 30 renames the guest hostname, then
+                        afterCanonicalIPReady renames it in Parallels too.
 
-                """.utf8))
-            return (ip: hint, uuid: uuid)
+                    """.utf8))
+                return (ip: hint, uuid: found.uuid)
+            }
         }
-        return (ip: reportedIP, uuid: uuid)
+
+        return nil
     }
 
     // MARK: - list helpers
