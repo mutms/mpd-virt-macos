@@ -134,7 +134,7 @@ extension MpdVirt.Diag {
             warn("\(MpdVirt.WireGuard.containerDNS) NOT reachable — set up one of:")
             print("")
             print("    A) Static route via this VM (simplest, no WireGuard):")
-            print("           sudo route -n add \(MpdVirt.WireGuard.containerSubnet) \(entry.ip)")
+            print("           sudo route -n delete \(MpdVirt.WireGuard.containerSubnet) 2>/dev/null; sudo route -n add \(MpdVirt.WireGuard.containerSubnet) \(entry.ip)")
             print("")
             print("    B) WireGuard tunnel (encrypted, also works off-LAN):")
             let clientConf = MpdVirt.vmWireGuardConfFile(octet: entry.octet)
