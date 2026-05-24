@@ -1,35 +1,16 @@
 // mpd-virt — Namespace root.
 //
-// macOS host-side orchestrator for mpd. Drives Parallels Desktop Pro to
-// create + manage mpd VMs. Replaces the bash setup/macos/ tree
-// that used to live in the main mpd repo.
+// macOS host-side orchestrator for mpd. Drives a hypervisor backend
+// (Parallels Desktop Pro, UTM, or — for adoption of pre-existing VMs —
+// the backend-less "general" path) to create + manage mpd VMs.
 //
-// Verb implementations live in matching files via extension:
-//   MpdVirt.Create    → Create.swift
-//   MpdVirt.Delete    → Delete.swift
-//   MpdVirt.Start     → Start.swift
-//   MpdVirt.Stop      → Stop.swift
-//   MpdVirt.List      → List.swift
-//   MpdVirt.Show      → Show.swift
-//   MpdVirt.Doctor    → Doctor.swift
-//   MpdVirt.WireGuard → WireGuard.swift
-//
-// Multi-VM model: any number of mpd VMs can coexist and run
-// simultaneously. WireGuard.app's active tunnel determines which VM the
-// Mac's `*.mpd.test` traffic is currently routed to — there's no "current
-// VM" tracked on disk by mpd-virt.
+// Verb implementations live under Verbs/, backend implementations under
+// Backend/. The Backend enum (raw value: backend name) carries both the
+// kind tag and the dispatch surface. See Backend/Backend.swift.
 
 import Foundation
 
 enum MpdVirt {
-    enum Create {}
-    enum Delete {}
-    enum Start {}
-    enum Stop {}
-    enum List {}
-    enum Show {}
-    enum Doctor {}
-    enum WireGuard {}
 
     // MARK: - Persistent paths on the macOS host
 
@@ -43,38 +24,111 @@ enum MpdVirt {
     static var rootDir: String { "\(homeDir)/.mpd-virt" }
 
     /// Persistent identity dir: `~/.mpd-virt/conf/`.
-    /// CA, WG keys, service certs. Survives every `mpd-virt delete <octet>`.
+    /// CA, WG keys, service certs, default-backend file. Survives every
+    /// `mpd-virt delete <octet>`.
     static var confDir: String { "\(rootDir)/conf" }
 
     /// CA root keypair: `~/.mpd-virt/conf/caroot/`.
     static var caRootDir: String { "\(confDir)/caroot" }
 
     /// WireGuard keys + configs: `~/.mpd-virt/conf/wireguard/`.
-    /// Includes the shared `mac.{private,public}` and per-VM
-    /// `machine/<octet>/` subdirs.
     static var wireGuardDir: String { "\(confDir)/wireguard" }
 
     /// Service certificate dir: `~/.mpd-virt/conf/service/`.
     static var serviceCertDir: String { "\(confDir)/service" }
 
+    /// Default-backend file: `~/.mpd-virt/conf/backend.env`.
+    /// Single line: `MPD_VIRT_DEFAULT_BACKEND=<name>`.
+    static var backendConfFile: String { "\(confDir)/backend.env" }
+
     /// 3-digit string form of an octet (`"159"`, `"100"`, …). Same shape
     /// used for VM names, host directories, SSH aliases, WG tunnel names.
     static func vmId(octet: Int) -> String { String(format: "%03d", octet) }
 
-    /// Per-VM bookkeeping dir: `~/.mpd-virt/<NNN>/`.
-    /// Removed by `mpd-virt delete <octet>`.
+    /// Per-VM bookkeeping dir: `~/.mpd-virt/<NNN>/`. The presence of
+    /// `<NNN>/env` inside it is what makes a VM "known to the registry".
+    /// Removed by `mpd-virt delete <octet>` (the `env` file too).
     static func vmDir(octet: Int) -> String { "\(rootDir)/\(vmId(octet: octet))" }
 
-    /// Convention: VM name in Parallels is `mpd-<NNN>` (3-digit padded).
-    static func vmName(octet: Int) -> String { "mpd-\(vmId(octet: octet))" }
+    /// Per-VM env file: `~/.mpd-virt/<NNN>/env`. See Registry.swift.
+    static func vmEnvFile(octet: Int) -> String { "\(vmDir(octet: octet))/env" }
 
-    /// Per-VM WG keys + configs: `~/.mpd-virt/conf/wireguard/<NNN>/`.
-    static func wgVmDir(octet: Int) -> String {
-        "\(wireGuardDir)/\(vmId(octet: octet))"
+    /// Per-VM WireGuard server conf: `~/.mpd-virt/<NNN>/wireguard.conf`.
+    /// The one file we scp into the VM at /var/lib/mpd/conf/wireguard/mpd0.conf.
+    /// (Mac-side client.conf / WG.app import is deferred — separate concern.)
+    static func vmWireGuardConfFile(octet: Int) -> String {
+        "\(vmDir(octet: octet))/wireguard.conf"
     }
 
-    /// Valid octet range for managed VMs. mpd-virt clamps to this so we
-    /// never collide with Parallels Shared's DHCP pool (1–99) or the
-    /// reserved broadcast/special addresses (>254).
+    /// Convention: VM name everywhere is `mpd-<NNN>` (3-digit padded).
+    static func vmName(octet: Int) -> String { "mpd-\(vmId(octet: octet))" }
+
+    /// Shared VM-side WG server conf: `~/.mpd-virt/conf/wireguard/server.conf`.
+    /// Pushed verbatim to every VM. Identical for every mpd-<NNN> on
+    /// this Mac because all VMs share the same WG identity (vm.private/
+    /// vm.public) and the same tunnel addressing (10.164.0.0/30).
+    static var wgServerConfFile: String { "\(wireGuardDir)/server.conf" }
+
+    /// Valid octet range for managed VMs. Clamped to avoid the Parallels
+    /// Shared DHCP pool (1–99) and the reserved broadcast/special
+    /// addresses (>254).
     static let managedOctetRange: ClosedRange<Int> = 100...254
+
+    // MARK: - Verb namespaces (one per file under Verbs/)
+
+    enum Create {}
+    enum Clone {}
+    enum Setup {}
+    enum Delete {}
+    enum Start {}
+    enum Stop {}
+    enum List {}
+    enum Diag {}
+    enum Update {}
+    enum BackendAdmin {}
+    enum Uninstall {}
+
+    // MARK: - Backend implementation namespaces (one per file under Backend/)
+
+    enum Parallels {}
+    enum UTM {}
+    enum General {}
+
+    // MARK: - Host helpers (under Host/)
+
+    enum Host {
+        enum Ssh {}            // Host/Ssh.swift          — ssh/scp wrapper
+        enum SudoRecipe {}     // Host/SudoRecipe.swift   — sudo UX printer
+        enum Keychain {}       // Host/Keychain.swift     — CA trust install/remove
+        enum SSHConfig {}      // Host/SSHConfig.swift    — ~/.ssh/config managed block
+    }
+
+    // MARK: - Bootstrap runner (under Bootstrap/)
+
+    enum Bootstrap {
+        enum RunInVM {}        // Bootstrap/RunInVM.swift — runs mpd/bootstrap/{10..60} via SSH
+    }
+
+    // MARK: - Other namespaces
+
+    enum WireGuard {}
+    enum Registry {}
+    enum CA {}                 // CA.swift                — name-constrained CA for *.mpd.test
+    enum Ui {}                 // Ui.swift                — shared section / ok / warn / fail printers
+
+    // MARK: - Debug tracing
+
+    /// Process-wide debug flag. When true, every external command
+    /// (ssh, scp, sudo, openssl, prlctl, …) prints its argv to stderr
+    /// before running and its exit code after. Set by the `--debug`
+    /// flag on the CLI verbs.
+    enum Debug {
+        nonisolated(unsafe) static var enabled: Bool = false
+
+        /// Emit a debug line, prefixed so it's easy to grep for.
+        static func log(_ msg: String) {
+            guard enabled else { return }
+            FileHandle.standardError.write(Data("  [debug] \(msg)\n".utf8))
+        }
+    }
 }

@@ -7,10 +7,13 @@ Creates and manages `mpd` VMs on the user's Mac. The binary is called
 This is the Swift replacement for the bash scripts that previously lived
 under `setup/macos/` in the mpd repo.
 
-**Hypervisor backends.** Today the only backend is **Parallels Desktop
-Pro** (`prlctl`). The repo is structured so additional backends (UTM,
-VMware Fusion, …) can be added as plugins without forking — one repo
-per host OS, multiple hypervisor backends inside.
+**Hypervisor backends.** Three compiled in:
+
+- **`parallels`** — Parallels Desktop Pro (`prlctl`). Initial scope: `clone` from an `mpd-template-<suffix>` template + lifecycle (`start`/`stop`/`delete`). Gains `create` later.
+- **`utm`** — UTM (`utmctl` + AppleScript). Initial scope: `create` from a cloud-init seed ISO + lifecycle. Gains `clone` later.
+- **`general`** — no hypervisor. Adopts any reachable Debian Trixie VM by IP. Only `setup` (and bookkeeping for `delete`/`list`/`show`/`doctor`) is meaningful here.
+
+Pick a default with `mpd-virt backend set-default <name>` (persists to `~/.mpd-virt/conf/backend.env`), or pass `--backend=<name>` on every invocation.
 
 ## Sibling repos (planned)
 
@@ -23,69 +26,60 @@ builds. Hypervisor variety lives *inside* each repo as plugins.
 
 ## Verbs
 
-CRUD-shaped, per VM. Multiple VMs can be tracked + running simultaneously;
-WireGuard.app's active tunnel determines which one the Mac's
-`*.mpd.test` traffic flows to — `mpd-virt` doesn't track a "current"
-VM on its own.
+The 3-digit octet `NNN` is the canonical key for every VM (name `mpd-<NNN>`, static IP `10.211.55.<NNN>`, registry dir `~/.mpd-virt/<NNN>/`, WG.app tunnel `mpd-<NNN>`). Multiple VMs can coexist; WireGuard.app's active tunnel decides which `*.mpd.test` traffic flows to.
+
+| Verb | Args | Role |
+|---|---|---|
+| `create <NNN>` | `--backend= --username= --vm-disk= --vm-ram= --yes` | User-friendly. Materialize a new VM (UTM cloud-init → eventually Parallels too) → `setup` → interactive `diag`. |
+| `clone <NNN>` | `--backend= --template=mpd-template-<suffix> --username= --vm-disk= --vm-ram= --yes` | User-friendly. Duplicate an existing VM (Parallels `prlctl clone` → eventually UTM too) → `setup` → interactive `diag`. |
+| `setup <NNN>` | `--ip= --backend= --username= --debug` | **VM side only.** Set up host↔VM SSH, run the in-VM bootstrap pipeline, install `mpd`. Non-interactive — for advanced/scripted use. Finishes with `diag --non-interactive`. |
+| `diag <NNN>` | `--non-interactive` | **macOS side.** Mandatory phase: registry → backend → ping → platform.env compare → SSH alias. Optional phase: DNS / routing / WG check + CA trust suggestion (always reported; interactive mode also pauses to apply fixes and re-test). |
+| `update <NNN>` | — | Pull latest mpd source on the VM, rebuild the `mpd` binary, re-run `mpd --setup`. Just runs `bash /opt/mpd/bootstrap/70-update.sh` over SSH — the update flow itself is mpd's contract, not mpd-virt's. |
+| `delete <NNN>` | `--keep-vm --yes` | Remove VM and registry entry. `--keep-vm` keeps the hypervisor VM (re-add with `setup`). |
+| `start <NNN>` | — | Hypervisor start. General: hard error. |
+| `stop <NNN>` | `--kill` | Hypervisor suspend (or hard-stop with `--kill`). General: hard error. |
+| `list` | `--json` | List registered VMs. Default verb. |
+| `uninstall` | `--force --yes` | Per-machine cleanup: CA from System Keychain, `~/.mpd-virt/conf/`, legacy `/etc/resolver/mpd.test`. |
+| `backend list` | — | Compiled-in backends + capabilities + default. |
+| `backend set-default` | `<name>` | Persist default backend to `~/.mpd-virt/conf/backend.env`. |
+
+### Setup vs diag — division of labor
+
+- **`setup`** owns the VM. It establishes SSH, runs the bootstrap chain
+  on the VM (10–60), pushes the CA and WG conf to `/var/lib/mpd/conf/`,
+  runs `mpd --setup` inside the VM, and registers the VM in
+  `~/.mpd-virt/<NNN>/`. It is non-interactive end-to-end — every input
+  comes from the CLI or the registry.
+- **`diag`** owns the Mac. It verifies the VM is healthy (mandatory
+  phase), then reports DNS / routing / WG / CA trust status (optional
+  phase, always printed). With `--non-interactive` (used by `setup`)
+  the optional phase only *prints* the suggested fix commands — the
+  workflow doesn't stop. Interactive mode (used by `create` / `clone`)
+  additionally pauses to let the dev apply each fix and re-tests.
+
+### Setup dispatch
+
+`setup` decides between **fix-known** mode (registry entry exists →
+reuse stored backend/IP/user) and **first-time adoption** (no entry →
+asks the backend via `locate(octet, ipHint:)`). Parallels can locate a
+manually-created `mpd-<NNN>` by name; General falls back to whatever
+`--ip` you pass; UTM is currently the same as General.
+
+## Registry
+
+The registry is the set of `~/.mpd-virt/<NNN>/env` files, one per known
+VM. Each file is shell-style key=value:
 
 ```
-mpd-virt create  <octet>      Clone the template into mpd-<NNN>,
-                              provision it, write SSH config block, import
-                              the WireGuard tunnel into WireGuard.app.
-mpd-virt delete  <octet>      Delete mpd-<NNN>. Removes the per-VM
-                              bookkeeping under ~/.mpd-virt/<octet>/ and the
-                              VM's SSH config entries; preserves
-                              ~/.mpd-virt/conf/ (CA + WG identity persist).
-mpd-virt start   <octet>      prlctl start mpd-<NNN>.
-mpd-virt stop    <octet>      prlctl suspend mpd-<NNN>.
-                              With --kill: prlctl stop --kill.
-mpd-virt list                 List every tracked VM with its Parallels state.
-                              Default verb when invoked with no args.
-mpd-virt show    <octet>      Detail view: state, IP, UUID, WG tunnel status.
-mpd-virt doctor               Re-assert host-side setup: CA trust in System
-                              Keychain, SSH config block, WG tunnels imported.
+MPD_VM_OCTET=155
+MPD_VM_NAME=mpd-155
+MPD_VM_BACKEND=parallels        # parallels | utm | general
+MPD_VM_IP=10.211.55.155
+MPD_VM_USER=skodak
+MPD_VM_UUID={abc12345-…}         # omitted for general
+MPD_VM_DISK=80G                  # diagnostic (when create/clone set it)
+MPD_VM_RAM=8G                    # diagnostic
 ```
-
-The octet is the last byte of the VM's static IP on the Parallels Shared
-network and is also the suffix in the VM name (`mpd-<NNN>`) and
-its WG tunnel name. One number, encoded everywhere.
-
-## What `mpd-virt create <octet>` does
-
-Functional contract (mirrors the bash flow from the old
-`setup/macos/lib/setup.sh`):
-
-1. Verify prerequisites: Parallels Desktop Pro installed, `prlctl` on PATH,
-   a Parallels VM template named `mpd-template`, host tooling
-   (`ssh`, `ssh-keygen`, `scp`, `security`, `route`).
-2. SSH key: use `~/.ssh/id_ed25519.pub` if present; offer to generate it
-   otherwise.
-3. Refuse if Parallels already has a VM named `mpd-<NNN>`.
-4. Generate / reuse persistent identity in `~/.mpd-virt/conf/`:
-   - mpd CA (`caroot/`) — generated on the first `create` ever.
-   - Mac-side WG keypair (`wireguard/mac.{private,public}`) — generated
-     on the first `create` ever.
-   - Per-VM WG keypair + configs (`wireguard/<octet>/…`) —
-     generated on the first `create` for this octet. **Reused on
-     re-create at the same octet**, so WireGuard.app's existing tunnel
-     keeps working.
-5. Trust the CA in the macOS System Keychain (idempotent).
-6. Clone `mpd-template` as `mpd-<NNN>`. Boot, wait for
-   SSH.
-7. Push CA + WG server.conf into the VM as
-   `~/.mpd/conf/{caroot/rootCA.pem, wireguard/mpd0.conf}`. Write
-   `~/.mpd/conf/platform.env` (`MPD_PLATFORM=managed`, …).
-8. Kick `mpd --setup` over SSH inside the VM.
-9. Write `~/.mpd-virt/<octet>/env` (VM metadata: UUID, IP, user — diagnostic).
-10. Import the WG `client.conf` into WireGuard.app as
-    `mpd-<NNN>`.
-11. Add `~/.ssh/config` entries:
-    - `Host mpd-<NNN>` → Parallels Shared IP.
-    - `Host mpd-<NNN>-{php,node,util}` → `ProxyJump
-      mpd-<NNN>`.
-
-After `create`, daily use needs no sudo and no `/etc/resolver/` files —
-WireGuard.app owns route + DNS while the tunnel is up.
 
 ## State / secrets layout (on the Mac)
 
@@ -96,8 +90,9 @@ WireGuard.app owns route + DNS while the tunnel is up.
 │   ├── wireguard/
 │   │   ├── mac.{private,public}
 │   │   └── <NNN>/{private,public,server.conf,client.conf}
-│   └── service/
-└── <NNN>/env                      ← per-VM bookkeeping (UUID, IP, …)
+│   ├── service/
+│   └── backend.env                ← MPD_VIRT_DEFAULT_BACKEND=<name>
+└── <NNN>/env                      ← per-VM registry entry (see Registry above)
 ```
 
 Octet range for managed VMs: `100–254` (Parallels Shared DHCP owns 1–99).
