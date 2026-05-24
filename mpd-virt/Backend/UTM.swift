@@ -30,7 +30,7 @@ extension MpdVirt.UTM {
     }
 
     static func describe(octet: Int) throws -> MpdVirt.BackendInfo {
-        return MpdVirt.BackendInfo(state: "unknown", uuid: nil)
+        return MpdVirt.BackendInfo(state: "unknown")
     }
 
     static func preflight(octet: Int) throws {

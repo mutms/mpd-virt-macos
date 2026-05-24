@@ -17,14 +17,13 @@ extension MpdVirt.General {
     /// General-backend VMs have no hypervisor to ask about state.
     /// The honest signal we CAN produce is reachability: ICMP-ping
     /// the registry-recorded IP and report "running" / "unreachable".
-    /// UUID stays nil — there's no hypervisor handle for general VMs.
     ///
     /// Tolerates a missing/malformed registry entry by returning
     /// "unknown" so callers like `list` don't blow up while
     /// enumerating.
     static func describe(octet: Int) throws -> MpdVirt.BackendInfo {
         guard let entry = try? MpdVirt.Registry.load(octet: octet) else {
-            return MpdVirt.BackendInfo(state: "unknown", uuid: nil)
+            return MpdVirt.BackendInfo(state: "unknown")
         }
         // 2-second ping timeout — matches diag's probe cap.
         let r = MpdVirt.Host.Ssh.runWithTimeout(
@@ -32,6 +31,6 @@ extension MpdVirt.General {
             timeoutSeconds: 2.0
         )
         let state = (r.exitCode == 0 && !r.timedOut) ? "running" : "unreachable"
-        return MpdVirt.BackendInfo(state: state, uuid: nil)
+        return MpdVirt.BackendInfo(state: state)
     }
 }

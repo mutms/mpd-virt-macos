@@ -61,11 +61,10 @@ extension MpdVirt {
         var capabilities: Capabilities {
             switch self {
             case .parallels:
-                // Initial scope: clone via `prlctl clone`. `create` lands
-                // in a follow-up (Parallels has no first-class headless
-                // "build from scratch" path; cloning a template is the
-                // canonical way).
-                return Capabilities(create: false, clone: true, lifecycle: true)
+                // Materialize via cloud-init seed ISO + Debian generic-
+                // cloud raw disk (CloudInit.swift), or clone from an
+                // existing template VM via `prlctl clone`.
+                return Capabilities(create: true, clone: true, lifecycle: true)
             case .utm:
                 // Initial scope: create via UTM's cloud-init seed-ISO
                 // flow. `clone` lands in a follow-up.
@@ -251,8 +250,6 @@ extension MpdVirt {
         /// Power state in the hypervisor: "running", "stopped",
         /// "suspended", "missing", "unknown".
         let state: String
-        /// Last known UUID, used for drift detection in `doctor`.
-        let uuid: String?
     }
 
     // MARK: - Errors

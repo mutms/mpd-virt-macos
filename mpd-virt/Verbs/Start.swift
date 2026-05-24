@@ -73,7 +73,7 @@ extension MpdVirt.Start {
     static func reportReachability(entry: MpdVirt.Registry.Entry) {
         section("VM reachability")
         let info = (try? entry.backend.describe(octet: entry.octet))
-            ?? MpdVirt.BackendInfo(state: "unknown", uuid: nil)
+            ?? MpdVirt.BackendInfo(state: "unknown")
         switch info.state {
         case "running":
             ok("\(entry.ip) responds — VM is alive")

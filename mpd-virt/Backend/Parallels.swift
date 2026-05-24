@@ -1,11 +1,10 @@
 // mpd-virt — Parallels backend (macOS only).
 //
-// Wraps `prlctl` (Parallels Desktop Pro CLI) for VM lifecycle. Initial
-// scope: `clone` from a `mpd-template-<suffix>` template + start /
-// stop / delete / describe. `create` (fresh VM from scratch) is a
-// follow-up — Parallels doesn't have a natural headless build-from-
-// scratch path; cloning a template is the canonical way to materialize
-// a VM here.
+// Wraps `prlctl` (Parallels Desktop Pro CLI) for VM lifecycle. Verbs:
+//   - `create` — fresh VM from Debian generic-cloud raw + cidata seed
+//     (see CloudInit.swift); the bootstrap pipeline then takes over.
+//   - `clone`  — duplicate an existing `mpd-template-<suffix>` VM.
+//   - start / stop / delete / describe — thin prlctl wrappers.
 //
 // `prlctl` must be on PATH; it ships with Parallels Desktop Pro. If
 // missing, every operation throws BackendError.missingExecutable with
@@ -43,10 +42,200 @@ extension MpdVirt.Parallels {
         return r.stdout
     }
 
-    // MARK: - create (not implemented yet)
+    // MARK: - create
 
+    /// Defaults when the caller doesn't pass --vm-ram / --vm-disk on
+    /// `mpd-virt create`. Sized for the typical mpd workload (Moodle +
+    /// MariaDB + Redis + a couple browser sessions).
+    private static let defaultMemoryMB = 8 * 1024
+    private static let defaultDiskGiB  = 80
+    private static let defaultCPUs     = 4
+
+    /// Hostname cloud-init sets on the freshly-booted VM. Bootstrap
+    /// step 30 renames it to `mpd-<NNN>` once the canonical IP is
+    /// pinned, so this is only ever visible to the user during the
+    /// first ~30s of the create flow.
+    private static let cloudInitInitialHostname = "mpd-template-cloudinit"
+
+    /// Materialize a brand-new Debian Trixie VM in Parallels via the
+    /// cloud-init seed ISO flow. Returns the VM's reachable IP (DHCP
+    /// from Parallels Shared) and Parallels UUID once the guest agent
+    /// reports them.
+    ///
+    /// The VM created here is **not** yet an mpd VM — bootstrap +
+    /// `mpd --setup` (driven by Setup.run after this returns) does that.
+    /// All we own here is "VM exists, it boots, you can SSH in as the
+    /// dev user with key auth".
     static func create(octet: Int, opts: MpdVirt.CreateOpts) throws -> MpdVirt.Provisioned {
-        throw MpdVirt.BackendError.notImplemented(verb: "create", backend: "parallels")
+        try requirePrlctl()
+        try preflight(octet: octet)
+        let target = MpdVirt.vmName(octet: octet)
+
+        // 1. Resolve dev user's SSH pubkey. Without one we'd have no
+        //    way to land in the VM after first boot.
+        let sshPubKey = try readDefaultSSHPubKey()
+
+        // 2. Resolve sizing.
+        let memoryMB = parseSizeMB(opts.vmRam) ?? defaultMemoryMB
+        let diskGiB  = parseSizeGiB(opts.vmDisk) ?? defaultDiskGiB
+
+        // 3. Ensure the cached Debian raw image exists (downloads once
+        //    on first call; instant thereafter).
+        _ = try MpdVirt.CloudInit.ensureBaseRawImage()
+
+        // 4. Create the Parallels VM shell — no HDD yet; we'll attach a
+        //    materialized raw disk and a cidata CD next.
+        FileHandle.standardError.write(Data(
+            "  ▶ prlctl create \(target) -o linux --distribution debian --no-hdd\n".utf8
+        ))
+        try prl([
+            "create", target,
+            "-o", "linux",
+            "--distribution", "debian",
+            "--no-hdd"
+        ])
+
+        // From here on, any failure should `prlctl delete` the half-
+        // built VM so a retry isn't blocked by name collision. We only
+        // unregister this on a successful return at the very bottom.
+        var cleanupVM = true
+        defer {
+            if cleanupVM {
+                FileHandle.standardError.write(Data(
+                    "  ⚠ create failed — removing half-built VM \(target)\n".utf8
+                ))
+                _ = try? prl(["stop", target, "--kill"])
+                _ = try? prl(["delete", target])
+            }
+        }
+
+        // 5. Find the VM's bundle path so we know where to drop the
+        //    materialized disk + cidata ISO. Parallels reports it as
+        //    the `Home` field from `prlctl list -i`.
+        guard let vmInfo = try info(target: target),
+              let home = vmInfo["Home"] as? String, !home.isEmpty
+        else {
+            throw MpdVirt.BackendError.other("""
+                Parallels created '\(target)' but didn't report a Home path. \
+                Inspect manually: `prlctl list -i \(target) -j`.
+                """)
+        }
+        let diskPath   = "\(home)/disk0.raw"
+        let cidataPath = "\(home)/cidata.iso"
+
+        // 6. Copy the cached raw into the VM bundle and sparse-extend
+        //    to the requested disk size.
+        try MpdVirt.CloudInit.materializePerVMDisk(
+            destPath: diskPath, targetGiB: diskGiB
+        )
+
+        // 7. Attach the disk as the primary HDD. `--type plain` tells
+        //    Parallels the file is a flat/raw byte-for-byte disk.
+        FileHandle.standardError.write(Data("  ▶ attaching disk \(diskPath)\n".utf8))
+        try prl([
+            "set", target,
+            "--device-add", "hdd",
+            "--image", diskPath,
+            "--type", "plain"
+        ])
+
+        // 8. Build the cloud-init seed ISO and attach as a CD.
+        try MpdVirt.CloudInit.makeCidataISO(
+            outputPath: cidataPath,
+            username: opts.username,
+            sshPubKey: sshPubKey,
+            localHostname: cloudInitInitialHostname
+        )
+        FileHandle.standardError.write(Data("  ▶ attaching cidata \(cidataPath)\n".utf8))
+        try prl([
+            "set", target,
+            "--device-add", "cdrom",
+            "--image", cidataPath,
+            "--connect"
+        ])
+
+        // 9. Resources.
+        FileHandle.standardError.write(Data(
+            "  ▶ resources: memsize=\(memoryMB)Mb cpus=\(defaultCPUs) disk=\(diskGiB)Gb\n".utf8
+        ))
+        try prl(["set", target, "--memsize", String(memoryMB)])
+        try prl(["set", target, "--cpus", String(defaultCPUs)])
+
+        // 10. Boot. cloud-init runs on first boot inside the VM —
+        //     creates the dev user, lays down the SSH key, grows the
+        //     rootfs to fill the resized disk, starts sshd.
+        FileHandle.standardError.write(Data("  ▶ prlctl start \(target)\n".utf8))
+        try prl(["start", target])
+
+        // 11. Wait for the guest agent to report an IP. Parallels' DHCP
+        //     hands out 10.211.55.x; the exact octet is unpredictable
+        //     here — bootstrap step 30 pins canonical later.
+        FileHandle.standardError.write(Data(
+            "  ▶ waiting for cloud-init to bring up sshd (up to 5 min) …\n".utf8
+        ))
+        let ip = try waitForGuestIP(target: target, timeoutSeconds: 300)
+        let uuid = try readUUID(target: target)
+        FileHandle.standardError.write(Data("  ▶ guest IP \(ip), uuid \(uuid)\n".utf8))
+
+        // 12. Probe SSH so we hand off to Setup with a known-good
+        //     channel. cloud-init's user-data + ssh_authorized_keys
+        //     should already make this work; if not, Setup's own SSH
+        //     probe would have to deal with a confusing error.
+        let sshTarget = MpdVirt.Host.Ssh.Target(user: opts.username, host: ip)
+        if !MpdVirt.Host.Ssh.waitUntilReachable(sshTarget, timeoutSeconds: 120) {
+            throw MpdVirt.BackendError.other("""
+                Parallels reported guest IP \(ip) but SSH as \(opts.username) didn't \
+                come up within 120s. cloud-init may still be running; inspect via \
+                Parallels Desktop and re-run with `mpd-virt setup \(MpdVirt.vmId(octet: octet)) \
+                --ip=\(ip) --username=\(opts.username) --backend=parallels`.
+                """)
+        }
+
+        cleanupVM = false
+        return MpdVirt.Provisioned(ip: ip, uuid: uuid)
+    }
+
+    /// Read the dev's SSH pubkey path matching the host's default
+    /// identity. Throws a useful error if no key exists yet — without
+    /// it, cloud-init has nothing to put in authorized_keys and the VM
+    /// would boot inaccessible.
+    private static func readDefaultSSHPubKey() throws -> String {
+        guard let priv = MpdVirt.Host.Ssh.defaultIdentityFile() else {
+            throw MpdVirt.BackendError.other("""
+                no SSH identity found in ~/.ssh/. Generate one first, e.g.:
+                    ssh-keygen -t ed25519
+                Then re-run `mpd-virt create`.
+                """)
+        }
+        let pub = priv + ".pub"
+        guard FileManager.default.fileExists(atPath: pub) else {
+            throw MpdVirt.BackendError.other("""
+                SSH identity \(priv) has no matching \(pub). Regenerate with:
+                    ssh-keygen -y -f \(priv) > \(pub)
+                """)
+        }
+        let raw = try String(contentsOfFile: pub, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.isEmpty {
+            throw MpdVirt.BackendError.other("\(pub) is empty.")
+        }
+        return raw
+    }
+
+    /// `"80G"` / `"81920M"` / `"81920"` → 80 (GiB). nil → caller falls
+    /// back to its default. Distinct from `parseSizeMB` because the
+    /// cloud-init disk extender works in whole GiB.
+    private static func parseSizeGiB(_ s: String?) -> Int? {
+        guard let raw = s?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        let lower = raw.lowercased()
+        if lower.hasSuffix("g") {
+            return Int(lower.dropLast())
+        }
+        if lower.hasSuffix("m") {
+            return Int(lower.dropLast()).map { $0 / 1024 }
+        }
+        // Bare number → assume MB (matches parseSizeMB) and convert.
+        return Int(lower).map { $0 / 1024 }
     }
 
     // MARK: - clone
@@ -451,12 +640,16 @@ extension MpdVirt.Parallels {
 
         // `prlctl status` shape: `VM '<name>' exist <state>`.
         // States we care about: running, stopped, suspended, paused.
+        // One prlctl call — `list` enumerates the registry, so this is
+        // on the hot path; the full-info `list -i -j` would be ~5×
+        // slower and we don't need UUID here.
         let statusLine = (try? prl(["status", target]))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let state: String
         if statusLine.isEmpty {
-            return MpdVirt.BackendInfo(state: "missing", uuid: nil)
-        } else if statusLine.contains(" running") {
+            return MpdVirt.BackendInfo(state: "missing")
+        }
+        let state: String
+        if statusLine.contains(" running") {
             state = "running"
         } else if statusLine.contains(" suspended") {
             state = "suspended"
@@ -467,9 +660,7 @@ extension MpdVirt.Parallels {
         } else {
             state = "unknown"
         }
-
-        let uuid = (try? readUUID(target: target))
-        return MpdVirt.BackendInfo(state: state, uuid: uuid)
+        return MpdVirt.BackendInfo(state: state)
     }
 
     // MARK: - prlctl info parsing

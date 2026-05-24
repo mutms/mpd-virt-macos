@@ -114,6 +114,7 @@ enum MpdVirt {
     enum WireGuard {}
     enum Registry {}
     enum CA {}                 // CA.swift                — name-constrained CA for *.mpd.test
+    enum CloudInit {}          // CloudInit.swift         — cloud image cache + cidata ISO gen
     enum Ui {}                 // Ui.swift                — shared section / ok / warn / fail printers
 
     // MARK: - Debug tracing
