@@ -206,18 +206,32 @@ extension MpdVirt.Host.Ssh {
 
             """.utf8))
 
-        var argv = ["/usr/bin/ssh-copy-id"]
+        var copyArgv = ["/usr/bin/ssh-copy-id"]
         if let key = identityFile {
-            argv += ["-i", "\(key).pub"]
+            copyArgv += ["-i", "\(key).pub"]
         }
-        argv += ["-o", "StrictHostKeyChecking=accept-new"]
-        argv += [target.sshTarget]
+        copyArgv += ["-o", "StrictHostKeyChecking=accept-new"]
+        copyArgv += [target.sshTarget]
+
+        // Wrap in /usr/bin/script (BSD on macOS) which allocates a
+        // fresh pseudo-terminal and runs the child inside it. Same
+        // trick we use for the bootstrap stream call: Foundation's
+        // Process inherits fds but not a "real" controlling
+        // terminal — and ssh-copy-id's internal `cat | ssh` pipeline
+        // wants one for the password prompt path (ssh does tcsetattr
+        // on its local side when prompting). Inside script's PTY,
+        // ssh sees a proper TTY and works the same as if you typed
+        // ssh-copy-id at your own shell.
+        //
+        // script syntax (BSD): `script -q <typescript_file> <cmd> [args]`.
+        // -q suppresses the start/end banner; /dev/null discards the
+        // typescript log.
+        let argv = ["/usr/bin/script", "-q", "/dev/null"] + copyArgv
 
         MpdVirt.Debug.log("run interactive: \(argvForLog(argv))")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: argv[0])
         process.arguments = Array(argv.dropFirst())
-        // Explicit stdio inheritance — the child gets our terminal.
         process.standardInput  = FileHandle.standardInput
         process.standardOutput = FileHandle.standardOutput
         process.standardError  = FileHandle.standardError
