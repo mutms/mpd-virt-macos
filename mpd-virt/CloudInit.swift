@@ -1,13 +1,19 @@
 // mpd-virt — Cloud-init image cache + NoCloud seed ISO generation.
 //
 // Shared by backends that materialize a Debian VM from a cloud image
-// (Parallels create; UTM create later). The flow is:
+// (UTM today; other cloud-init flows in the future). Two helpers:
 //
-//   1. ensureBaseRawImage() — download Debian generic-cloud .tar.xz into
-//      ~/.mpd-virt/conf/cloud-images/ on first use, extract once, leave
-//      the raw disk in place. Subsequent VMs reuse the cached file.
+//   1. ensureBaseArchive() — download the Debian generic-cloud .tar.xz
+//      into ~/.mpd-virt/conf/cloud-images/ on first use. Subsequent
+//      creates reuse the cached archive. The raw disk inside is NOT
+//      cached — extraction is cheap (a few seconds on Apple Silicon)
+//      and a stray multi-GB raw on disk is more annoying than re-running
+//      `tar -xJf` per create.
 //
-//   2. makeCidataISO(...) — write meta-data + user-data for a single VM
+//   2. extractRawTo(destPath:) — extract the raw disk image from the
+//      cached archive directly to a caller-specified per-VM path.
+//
+//   3. makeCidataISO(...) — write meta-data + user-data for a single VM
 //      into a temp dir, then `hdiutil makehybrid` it into an ISO with
 //      the volume label `cidata` that cloud-init's NoCloud datasource
 //      picks up at first boot.
@@ -15,12 +21,11 @@
 // `makeCidataISO` takes an optional `networkConfig` string. Callers
 // that want a static IP from boot one (UTM, mirroring the historical
 // macos-utm flow) pass a cloud-init v2 ethernets block; callers that
-// prefer DHCP-then-bootstrap-step-30 (Parallels clone path) pass nil.
+// prefer DHCP-then-bootstrap-step-30 pass nil.
 //
 // The URL pin matches mpd/setup/linux/lib/common.sh (and the historical
 // mpd/setup/macos-utm one). When Debian publishes a new daily, bump both
-// in lockstep. Users who want a different image can drop their own .raw
-// at the canonical cache path.
+// in lockstep.
 
 import Foundation
 
@@ -34,17 +39,14 @@ extension MpdVirt.CloudInit {
     static let cloudBase = "https://cloud.debian.org/images/cloud/trixie/20260501-2465"
     static let cloudArchive = "debian-13-genericcloud-arm64-20260501-2465.tar.xz"
 
-    /// Canonical local name we resolve `.tar.xz` extraction to. Stable
-    /// across Debian dailies so users can drop their own raw image here
-    /// and the create flow picks it up untouched.
-    static let canonicalRawName = "debian-13-genericcloud-arm64.raw"
-
-    /// Where the cached cloud image lives:
-    /// `~/.mpd-virt/conf/cloud-images/`.
+    /// Where the cached cloud archive lives:
+    /// `~/.mpd-virt/conf/cloud-images/`. Only the .tar.xz is cached —
+    /// the multi-GB raw disk inside is re-extracted to a per-VM path
+    /// on every create.
     static var imageCacheDir: String { "\(MpdVirt.confDir)/cloud-images" }
 
-    /// Absolute path to the canonical cached raw disk.
-    static var canonicalRawPath: String { "\(imageCacheDir)/\(canonicalRawName)" }
+    /// Absolute path to the cached archive.
+    static var cachedArchivePath: String { "\(imageCacheDir)/\(cloudArchive)" }
 
     // MARK: - Errors
 
@@ -71,71 +73,75 @@ extension MpdVirt.CloudInit {
         }
     }
 
-    // MARK: - Public: cached raw image
+    // MARK: - Public: archive cache + raw extraction
 
-    /// Ensure a Debian generic-cloud raw disk is on the host at
-    /// `canonicalRawPath`. Returns the path. Idempotent: a second call
-    /// with the same cache state is instant.
-    ///
-    /// Flow when the cache is cold:
-    ///   curl <cloudBase>/<cloudArchive> → <imageCacheDir>/<archive>
-    ///   tar -xJf <archive>              → <imageCacheDir>/disk.raw (or similar)
-    ///   mv <whatever-came-out>          → <canonicalRawPath>
-    ///
-    /// Users who pre-stage a different raw image at `canonicalRawPath`
-    /// short-circuit the download entirely (just exists-check passes).
+    /// Ensure the Debian generic-cloud archive is cached on the host.
+    /// Returns its path. Idempotent: instant if already downloaded.
     @discardableResult
-    static func ensureBaseRawImage() throws -> String {
+    static func ensureBaseArchive() throws -> String {
         try ensureCacheDir()
 
-        if FileManager.default.fileExists(atPath: canonicalRawPath) {
-            return canonicalRawPath
+        if FileManager.default.fileExists(atPath: cachedArchivePath) {
+            return cachedArchivePath
         }
 
-        let archivePath = "\(imageCacheDir)/\(cloudArchive)"
         let url = "\(cloudBase)/\(cloudArchive)"
+        FileHandle.standardError.write(Data("  ▶ downloading \(cloudArchive) (~200 MB) …\n".utf8))
+        let r = try MpdVirt.Host.Ssh.runProcess(argv: [
+            "/usr/bin/curl", "-L", "--fail", "--progress-bar",
+            "-o", cachedArchivePath,
+            url
+        ])
+        if !r.ok {
+            try? FileManager.default.removeItem(atPath: cachedArchivePath)
+            throw Failure.downloadFailed(url: url, exitCode: r.exitCode)
+        }
+        return cachedArchivePath
+    }
 
-        if !FileManager.default.fileExists(atPath: archivePath) {
-            FileHandle.standardError.write(Data("  ▶ downloading \(cloudArchive) (~200 MB) …\n".utf8))
-            let r = try MpdVirt.Host.Ssh.runProcess(argv: [
-                "/usr/bin/curl", "-L", "--fail", "--progress-bar",
-                "-o", archivePath,
-                url
-            ])
-            if !r.ok {
-                try? FileManager.default.removeItem(atPath: archivePath)
-                throw Failure.downloadFailed(url: url, exitCode: r.exitCode)
-            }
-        } else {
-            FileHandle.standardError.write(Data("  ▶ using cached archive: \(cloudArchive)\n".utf8))
+    /// Extract the raw disk image inside the cached archive to
+    /// `destPath`. The cached archive is downloaded on first use.
+    /// Refuses to clobber an existing file at `destPath`.
+    static func extractRawTo(destPath: String) throws {
+        let archivePath = try ensureBaseArchive()
+
+        if FileManager.default.fileExists(atPath: destPath) {
+            throw Failure.ioFailed("destination raw already exists: \(destPath)")
         }
 
-        // Clear stale .raw artifacts so the freshly-extracted file is
-        // unambiguous (Debian's archive layout varies by release).
-        try clearStaleRaws()
+        // tar extracts whatever filename is inside the archive (Debian
+        // currently ships `disk.raw`, but tolerate variation). Stage to a
+        // temp dir so we can find the .raw and move it to destPath, then
+        // wipe the temp dir.
+        let parent = (destPath as NSString).deletingLastPathComponent
+        if !parent.isEmpty {
+            try FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: parent), withIntermediateDirectories: true
+            )
+        }
 
-        FileHandle.standardError.write(Data("  ▶ extracting \(cloudArchive) …\n".utf8))
+        let tempDir = NSTemporaryDirectory() + "mpd-virt-rawx-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: tempDir), withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+        FileHandle.standardError.write(Data("  ▶ extracting \(cloudArchive) → \(destPath) …\n".utf8))
         let extracted = try MpdVirt.Host.Ssh.runProcess(argv: [
-            "/usr/bin/tar", "-xJf", archivePath, "-C", imageCacheDir
+            "/usr/bin/tar", "-xJf", archivePath, "-C", tempDir
         ])
         if !extracted.ok {
             throw Failure.extractFailed(archive: cloudArchive, exitCode: extracted.exitCode)
         }
 
-        // Find whatever raw came out and rename to canonical.
-        guard let rawFile = try locateExtractedRaw() else {
+        // Find whatever raw came out of the archive.
+        let entries = try FileManager.default.contentsOfDirectory(atPath: tempDir)
+        guard let raw = entries.first(where: { $0.hasSuffix(".raw") || $0.hasPrefix("disk.") })
+        else {
             throw Failure.rawNotFoundInArchive(archive: cloudArchive)
         }
-        if rawFile != canonicalRawPath {
-            do {
-                try FileManager.default.moveItem(atPath: rawFile, toPath: canonicalRawPath)
-            } catch {
-                throw Failure.ioFailed("could not rename \(rawFile) → \(canonicalRawPath): \(error)")
-            }
-        }
 
-        FileHandle.standardError.write(Data("  ✓ raw image ready: \(canonicalRawPath)\n".utf8))
-        return canonicalRawPath
+        try FileManager.default.moveItem(atPath: "\(tempDir)/\(raw)", toPath: destPath)
     }
 
     // MARK: - Public: cidata ISO
@@ -249,35 +255,5 @@ extension MpdVirt.CloudInit {
             at: URL(fileURLWithPath: imageCacheDir),
             withIntermediateDirectories: true
         )
-    }
-
-    /// Delete leftover .raw / disk.* files in the cache dir before a
-    /// fresh extract, so `locateExtractedRaw` finds exactly one match.
-    /// Spares the canonical raw itself — that's the cache we want to
-    /// keep.
-    private static func clearStaleRaws() throws {
-        let fm = FileManager.default
-        let entries = try fm.contentsOfDirectory(atPath: imageCacheDir)
-        for name in entries {
-            if name == canonicalRawName { continue }
-            if name.hasSuffix(".raw") || name.hasPrefix("disk.") {
-                try? fm.removeItem(atPath: "\(imageCacheDir)/\(name)")
-            }
-        }
-    }
-
-    /// Find the .raw the most recent tar -xJf produced. Debian's
-    /// archive currently extracts a `disk.raw` but we tolerate any
-    /// `*.raw` for forward-compat.
-    private static func locateExtractedRaw() throws -> String? {
-        let fm = FileManager.default
-        let entries = try fm.contentsOfDirectory(atPath: imageCacheDir)
-        for name in entries {
-            if name == canonicalRawName { continue }
-            if name.hasSuffix(".raw") || name.hasPrefix("disk.") {
-                return "\(imageCacheDir)/\(name)"
-            }
-        }
-        return nil
     }
 }

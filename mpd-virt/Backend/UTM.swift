@@ -67,8 +67,10 @@ extension MpdVirt.UTM {
         let diskGiB   = parseSizeGiB(opts.vmDisk) ?? defaultDiskGiB
         let cpus      = defaultCPUs
 
-        // 2. Cached Debian raw image. First call downloads + extracts.
-        let cachedRaw = try MpdVirt.CloudInit.ensureBaseRawImage()
+        // 2. Cached Debian archive (downloads on first call; instant
+        //    thereafter). The raw inside is NOT cached — we extract it
+        //    straight to the per-VM staging path below.
+        _ = try MpdVirt.CloudInit.ensureBaseArchive()
 
         // 3. Per-VM staging dir. Wiped + recreated so a previous half-
         //    failed attempt doesn't poison this run.
@@ -85,10 +87,12 @@ extension MpdVirt.UTM {
             }
         }
 
-        // 4. Materialize per-VM disk: copy raw, sparse-grow with dd.
+        // 4. Materialize per-VM disk: extract the raw directly to the
+        //    staging path, then sparse-grow with dd.
         let diskPath = "\(staging)/\(target).raw"
         let seedPath = "\(staging)/seed.iso"
-        try cpAndGrow(source: cachedRaw, dest: diskPath, targetGiB: diskGiB)
+        try MpdVirt.CloudInit.extractRawTo(destPath: diskPath)
+        try growRaw(path: diskPath, targetGiB: diskGiB)
 
         // 5. Generate cidata ISO with static IP pinned. The historical
         //    macos-utm flow does this — the VM lands at the canonical IP
@@ -459,19 +463,15 @@ extension MpdVirt.UTM {
 
     // MARK: - Disk materialization
 
-    /// Copy `source` → `dest`, then sparse-extend `dest` to
-    /// `targetGiB`. Refuses to shrink.
-    private static func cpAndGrow(source: String, dest: String, targetGiB: Int) throws {
-        FileHandle.standardError.write(Data("  ▶ copying base disk → \(dest) …\n".utf8))
-        let cp = try MpdVirt.Host.Ssh.runProcess(argv: ["/bin/cp", source, dest])
-        if !cp.ok {
-            throw MpdVirt.BackendError.other("cp \(source) → \(dest) failed (exit \(cp.exitCode)).")
-        }
-        let attrs = try FileManager.default.attributesOfItem(atPath: dest)
+    /// Sparse-extend `path` to `targetGiB`. Refuses to shrink. The
+    /// `dd seek=` creates a hole — no actual space is written; the
+    /// guest's growpart + resize2fs claims it later.
+    private static func growRaw(path: String, targetGiB: Int) throws {
+        let attrs = try FileManager.default.attributesOfItem(atPath: path)
         let currentBytes = (attrs[.size] as? Int) ?? 0
         let targetBytes  = targetGiB * 1024 * 1024 * 1024
         if targetBytes < currentBytes {
-            try? FileManager.default.removeItem(atPath: dest)
+            try? FileManager.default.removeItem(atPath: path)
             throw MpdVirt.BackendError.other("""
                 requested disk size \(targetGiB) GB is smaller than the cloud image \
                 (\(currentBytes / (1024*1024*1024)) GB). Pick a larger --vm-disk.
@@ -480,7 +480,7 @@ extension MpdVirt.UTM {
         if targetBytes > currentBytes {
             FileHandle.standardError.write(Data("  ▶ growing disk to \(targetGiB) GB (sparse) …\n".utf8))
             let dd = try MpdVirt.Host.Ssh.runProcess(argv: [
-                "/bin/dd", "if=/dev/zero", "of=\(dest)",
+                "/bin/dd", "if=/dev/zero", "of=\(path)",
                 "bs=1", "count=0", "seek=\(targetBytes)"
             ])
             if !dd.ok {
