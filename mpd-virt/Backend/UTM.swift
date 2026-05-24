@@ -15,14 +15,25 @@
 //
 // Prerequisites the user is expected to have already configured:
 //   - UTM.app installed (App Store or DMG).
-//   - UTM's host-side network for VMs routes the 10.211.55.0/24 subnet
-//     with gateway 10.211.55.1 — same as Parallels Shared. The historical
-//     mpd/setup/macos-utm flow assumed this and we mirror it.
+//
+// Networking: UTM uses macOS's vmnet shared bridge for `mode:shared`,
+// which is **fixed at 192.168.64.0/24** by vmnet.framework. mpd-virt's
+// canonical IP for UTM VMs is therefore `192.168.64.<NNN>` (gateway
+// `192.168.64.1`) — declared on `MpdVirt.UTM.canonicalSubnet`. Mirrors
+// the historical mpd/setup/macos-utm/lib/common.sh exactly.
 
 #if os(macOS)
 import Foundation
 
 extension MpdVirt.UTM {
+
+    // MARK: - canonical addressing
+
+    /// macOS vmnet shared bridge = `192.168.64.0/24`. **Fixed by
+    /// vmnet.framework** — not user-configurable. QEMU under UTM uses
+    /// vmnet for `shared` networking, so every UTM VM ends up on this
+    /// subnet whether we like it or not.
+    static let canonicalSubnet = "192.168.64"
 
     // MARK: - Defaults / paths
 
@@ -52,7 +63,8 @@ extension MpdVirt.UTM {
         try requireUTMApp()
         try preflight(octet: octet)
         let target   = MpdVirt.vmName(octet: octet)
-        let canonIP  = "10.211.55.\(octet)"
+        let canonIP  = MpdVirt.Backend.utm.canonicalIP(octet: octet)
+        let gateway  = "\(canonicalSubnet).1"
 
         // 1. Inputs.
         let sshPubKey = try readDefaultSSHPubKey()
@@ -92,9 +104,9 @@ extension MpdVirt.UTM {
         ethernets:
           enp0s1:
             addresses: [\(canonIP)/24]
-            gateway4: 10.211.55.1
+            gateway4: \(gateway)
             nameservers:
-              addresses: [10.211.55.1]
+              addresses: [\(gateway)]
         """
         FileHandle.standardError.write(Data("  ▶ writing cidata seed → \(seedPath)\n".utf8))
         try MpdVirt.CloudInit.makeCidataISO(
@@ -139,15 +151,15 @@ extension MpdVirt.UTM {
         try runAppleScript(startVMScript(name: target))
 
         // 9. Wait for SSH at canonical IP. cloud-init's user-data lays
-        //    down the SSH key; network-config pins the static IP. If the
-        //    user's UTM network isn't routing 10.211.55.0/24, this is
-        //    where it fails with a timeout pointing them at the prereq.
+        //    down the SSH key; network-config pins the static IP. The
+        //    subnet (192.168.64.0/24) is the macOS vmnet shared bridge,
+        //    fixed by vmnet.framework — no host config is needed.
         let sshTarget = MpdVirt.Host.Ssh.Target(user: opts.username, host: canonIP)
         if !MpdVirt.Host.Ssh.waitUntilReachable(sshTarget, timeoutSeconds: 300) {
             throw MpdVirt.BackendError.other("""
-                UTM VM '\(target)' didn't come up at \(canonIP) within 5 min. Check:
-                  - UTM's host-side network is configured for 10.211.55.0/24 (gateway 10.211.55.1).
-                  - cloud-init didn't fail inside the VM (open the UTM console to inspect).
+                UTM VM '\(target)' didn't come up at \(canonIP) within 5 min. \
+                cloud-init may still be running or have failed; open the UTM \
+                console to inspect.
                 """)
         }
 
@@ -242,7 +254,7 @@ extension MpdVirt.UTM {
         let target = MpdVirt.vmName(octet: octet)
         if vmExists(name: target) {
             let uuid = try? readVMID(name: target)
-            return (ip: "10.211.55.\(octet)", uuid: uuid)
+            return (ip: MpdVirt.Backend.utm.canonicalIP(octet: octet), uuid: uuid)
         }
         if let ip = ipHint { return (ip: ip, uuid: nil) }
         return nil

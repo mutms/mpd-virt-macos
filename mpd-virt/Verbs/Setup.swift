@@ -109,7 +109,7 @@ extension MpdVirt.Setup {
         // regeneratable from the persisted keys, so this is idempotent.
         _ = try MpdVirt.WireGuard.macKeypair()
         let (serverConf, clientConf) = try MpdVirt.WireGuard.Confs.renderAndSave(
-            octet: octet, vmEndpoint: "10.211.55.\(octet)"
+            octet: octet, vmEndpoint: backend.canonicalIP(octet: octet)
         )
         info("WG: server.conf at \(serverConf)")
         info("WG: client.conf at \(clientConf)")
@@ -125,7 +125,7 @@ extension MpdVirt.Setup {
         // exactly when the VM moves to its canonical IP. That's the
         // point at which the VM is "ours"; before, it's just any old
         // box at some random IP.
-        let canonicalIP = "10.211.55.\(octet)"
+        let canonicalIP = backend.canonicalIP(octet: octet)
         let canonicalTarget = MpdVirt.Host.Ssh.Target(user: username, host: canonicalIP)
         let alreadyProvisioned = MpdVirt.Registry.exists(octet: octet)
             && MpdVirt.Host.Ssh.reachable(canonicalTarget)
@@ -136,6 +136,7 @@ extension MpdVirt.Setup {
             try MpdVirt.Bootstrap.RunInVM.run(
                 octet: octet,
                 initialIP: ip,
+                canonicalIP: canonicalIP,
                 username: username,
                 wgServerConfPath: serverConf,
                 caCertPath: MpdVirt.CA.certPath,

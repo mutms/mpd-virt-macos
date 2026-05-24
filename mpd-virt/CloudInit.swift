@@ -12,11 +12,10 @@
 //      the volume label `cidata` that cloud-init's NoCloud datasource
 //      picks up at first boot.
 //
-// We deliberately do NOT emit a `network-config` file — the VM comes up
-// on DHCP from Parallels Shared, gets some IP in 10.211.55.x, and
-// bootstrap step `30-networking.sh <NNN>` later pins the canonical
-// static IP. Same path as the clone-from-template flow; no second code
-// path to maintain.
+// `makeCidataISO` takes an optional `networkConfig` string. Callers
+// that want a static IP from boot one (UTM, mirroring the historical
+// macos-utm flow) pass a cloud-init v2 ethernets block; callers that
+// prefer DHCP-then-bootstrap-step-30 (Parallels clone path) pass nil.
 //
 // The URL pin matches mpd/setup/linux/lib/common.sh (and the historical
 // mpd/setup/macos-utm one). When Debian publishes a new daily, bump both

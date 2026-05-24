@@ -39,17 +39,16 @@ extension MpdVirt.Start {
             }
         }
 
-        // 2. Wait for SSH at canonical IP. Skip if already reachable
-        //    (already-running VMs answer immediately).
+        // 2. Wait for SSH at the registered IP. Skip if already
+        //    reachable (already-running VMs answer immediately).
         section("Waiting for SSH")
-        let canonicalIP = "10.211.55.\(entry.octet)"
-        let target = MpdVirt.Host.Ssh.Target(user: entry.user, host: canonicalIP)
+        let target = MpdVirt.Host.Ssh.Target(user: entry.user, host: entry.ip)
         if MpdVirt.Host.Ssh.reachable(target) {
-            ok("\(canonicalIP) responds")
+            ok("\(entry.ip) responds")
         } else if MpdVirt.Host.Ssh.waitUntilReachable(target, timeoutSeconds: 60) {
-            ok("\(canonicalIP) responds (after wait)")
+            ok("\(entry.ip) responds (after wait)")
         } else {
-            warn("\(canonicalIP) still unreachable after 60s — VM may still be booting")
+            warn("\(entry.ip) still unreachable after 60s — VM may still be booting")
             MpdVirt.Ui.indent("Re-run `mpd-virt diag \(entry.octet)` once it's up.")
             return
         }

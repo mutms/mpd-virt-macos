@@ -58,8 +58,11 @@ extension MpdVirt.Bootstrap.RunInVM {
     /// Run the full bootstrap pipeline against a VM.
     /// - Parameters:
     ///   - octet: canonical NNN (becomes the VM's hostname + static IP suffix).
-    ///   - initialIP: the IP we currently reach the VM at. After
-    ///     `30-networking.sh` runs, the VM moves to `10.211.55.<octet>`.
+    ///   - initialIP: the IP we currently reach the VM at.
+    ///   - canonicalIP: the IP the VM moves to after `30-networking.sh`
+    ///     pins it. Backend-dependent (Parallels=`10.211.55.<NNN>`,
+    ///     UTM=`192.168.64.<NNN>`); resolved by the caller via
+    ///     `Backend.canonicalIP(octet:)`.
     ///   - username: dev user inside the VM (must already have SSH key
     ///     trust on the host's id_ed25519 / agent).
     ///   - wgServerConfPath: local path to the rendered server.conf
@@ -68,20 +71,20 @@ extension MpdVirt.Bootstrap.RunInVM {
     static func run(
         octet: Int,
         initialIP: String,
+        canonicalIP: String,
         username: String,
         wgServerConfPath: String,
         caCertPath: String,
         caKeyPath: String,
         /// Fires the instant the VM is confirmed reachable at the
-        /// canonical IP `10.211.55.<NNN>`. This is the "point of no
-        /// return" — the VM has the right hostname, the right IP, and
-        /// is committed to being mpd-<NNN>. Setup uses this hook to
-        /// persist the registry entry; before this point the VM
-        /// isn't really "ours" yet.
+        /// canonical IP. This is the "point of no return" — the VM has
+        /// the right hostname, the right IP, and is committed to being
+        /// mpd-<NNN>. Setup uses this hook to persist the registry
+        /// entry; before this point the VM isn't really "ours" yet.
         onCanonicalIPReady: () throws -> Void
     ) throws {
         let initialTarget = MpdVirt.Host.Ssh.Target(user: username, host: initialIP)
-        let postRenameIP = "10.211.55.\(octet)"
+        let postRenameIP = canonicalIP
         let postRenameTarget = MpdVirt.Host.Ssh.Target(user: username, host: postRenameIP)
 
         // --- Phase A: at initial IP, before the rename ---

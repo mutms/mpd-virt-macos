@@ -19,6 +19,13 @@ import Foundation
 
 extension MpdVirt.Parallels {
 
+    // MARK: - canonical addressing
+
+    /// Parallels Desktop Shared = `10.211.55.0/24` (configurable in
+    /// Parallels Preferences → Network → Shared; mpd-virt assumes the
+    /// default). VMs land at `10.211.55.<NNN>` after bootstrap step 30.
+    static let canonicalSubnet = "10.211.55"
+
     // MARK: - prlctl probe
 
     private static let prlctlPath = "/usr/local/bin/prlctl"
@@ -155,7 +162,7 @@ extension MpdVirt.Parallels {
     static func preflight(octet: Int) throws {
         try requirePrlctl()
         let targetName = MpdVirt.vmName(octet: octet)
-        let canonicalIP = "10.211.55.\(octet)"
+        let canonicalIP = MpdVirt.Backend.parallels.canonicalIP(octet: octet)
 
         let vms = try listAllVMs()
 
@@ -189,7 +196,7 @@ extension MpdVirt.Parallels {
     static func afterCanonicalIPReady(octet: Int, hint: String?, user: String) throws {
         try requirePrlctl()
         let targetName = MpdVirt.vmName(octet: octet)
-        let canonicalIP = "10.211.55.\(octet)"
+        let canonicalIP = MpdVirt.Backend.parallels.canonicalIP(octet: octet)
 
         // Resolve a Parallels handle (UUID preferred, name acceptable)
         // for the VM we just renamed.

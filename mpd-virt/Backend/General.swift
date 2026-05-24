@@ -14,6 +14,12 @@ import Foundation
 
 extension MpdVirt.General {
 
+    /// General backend has no hypervisor and thus no native subnet —
+    /// the VM lives wherever the user pointed `--ip`. Default assumes
+    /// Parallels-like so the common "adopt my sandbox VM" path Just
+    /// Works with no flag; pass a different `--ip` for any other LAN.
+    static let canonicalSubnet = "10.211.55"
+
     /// General-backend VMs have no hypervisor to ask about state.
     /// The honest signal we CAN produce is reachability: ICMP-ping
     /// the registry-recorded IP and report "running" / "unreachable".

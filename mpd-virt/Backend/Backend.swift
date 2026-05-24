@@ -19,6 +19,29 @@ extension MpdVirt {
         case utm
         case general
 
+        // MARK: - Canonical addressing
+
+        /// First three octets of the LAN subnet mpd-<NNN> VMs live on
+        /// for this backend. Each backend declares its own value in its
+        /// own file; this just dispatches. The bootstrap's
+        /// `30-networking.sh` pins a static IP at
+        /// `<canonicalSubnet>.<NNN>`; everything mpd-virt computes
+        /// downstream (SSH targets, WG endpoint, ping probes) derives
+        /// from this.
+        var canonicalSubnet: String {
+            switch self {
+            case .parallels: return MpdVirt.Parallels.canonicalSubnet
+            case .utm:       return MpdVirt.UTM.canonicalSubnet
+            case .general:   return MpdVirt.General.canonicalSubnet
+            }
+        }
+
+        /// Canonical reachable IP for the VM identified by `octet`:
+        /// `<canonicalSubnet>.<NNN>`.
+        func canonicalIP(octet: Int) -> String {
+            return "\(canonicalSubnet).\(octet)"
+        }
+
         // MARK: - Discovery
 
         /// All backends compiled into this binary. Parallels and UTM

@@ -24,11 +24,10 @@ extension MpdVirt.Update {
         try validateOctet(octet)
         let entry = try MpdVirt.Registry.load(octet: octet)
 
-        let canonicalIP = "10.211.55.\(entry.octet)"
-        let target = MpdVirt.Host.Ssh.Target(user: entry.user, host: canonicalIP)
+        let target = MpdVirt.Host.Ssh.Target(user: entry.user, host: entry.ip)
 
         FileHandle.standardError.write(Data(
-            "  • updating \(entry.name) at \(canonicalIP)\n".utf8
+            "  • updating \(entry.name) at \(entry.ip)\n".utf8
         ))
 
         // Live-stream output — apt / git / make can take a while and

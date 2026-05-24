@@ -49,18 +49,17 @@ extension MpdVirt.Diag {
         entry.backend.printRegistry(entry: entry)
 
         // 3. ICMP ping.
-        let canonicalIP = "10.211.55.\(entry.octet)"
         section("Network reachability")
-        if pingOK(canonicalIP) {
-            ok("ICMP ping \(canonicalIP) replies")
+        if pingOK(entry.ip) {
+            ok("ICMP ping \(entry.ip) replies")
         } else {
-            fail("ping \(canonicalIP) — no reply. Is the VM running?")
+            fail("ping \(entry.ip) — no reply. Is the VM running?")
             return
         }
 
         // 4. Fetch + compare platform.env.
         section("VM platform identity")
-        let sshTarget = MpdVirt.Host.Ssh.Target(user: entry.user, host: canonicalIP)
+        let sshTarget = MpdVirt.Host.Ssh.Target(user: entry.user, host: entry.ip)
         let tmpEnv = "/tmp/mpd-virt-platform.\(getpid()).env"
         defer { try? FileManager.default.removeItem(atPath: tmpEnv) }
         do {
@@ -77,10 +76,10 @@ extension MpdVirt.Diag {
                 fail("MPD_VM_ID drift: guest=\(guestKV["MPD_VM_ID"] ?? "—") expected=\(expectedID)")
                 print("    → `mpd-virt setup \(expectedID)` to reconcile")
             }
-            if guestKV["MPD_VM_IP"] == canonicalIP {
-                ok("MPD_VM_IP matches (\(canonicalIP))")
+            if guestKV["MPD_VM_IP"] == entry.ip {
+                ok("MPD_VM_IP matches (\(entry.ip))")
             } else {
-                fail("MPD_VM_IP drift: guest=\(guestKV["MPD_VM_IP"] ?? "—") expected=\(canonicalIP)")
+                fail("MPD_VM_IP drift: guest=\(guestKV["MPD_VM_IP"] ?? "—") expected=\(entry.ip)")
                 print("    → `mpd-virt setup \(expectedID)` to reconcile")
             }
         } catch {
@@ -89,7 +88,7 @@ extension MpdVirt.Diag {
 
         // 5. SSH config block + alias probe.
         section("SSH config")
-        try MpdVirt.Host.SSHConfig.write(octet: entry.octet, ip: canonicalIP, user: entry.user)
+        try MpdVirt.Host.SSHConfig.write(octet: entry.octet, ip: entry.ip, user: entry.user)
         ok("~/.ssh/config block re-asserted for \(entry.name)")
         // known_hosts is moot — our managed block sets
         // UserKnownHostsFile=/dev/null, so no entries persist.
@@ -135,7 +134,7 @@ extension MpdVirt.Diag {
             warn("\(MpdVirt.WireGuard.containerDNS) NOT reachable — set up one of:")
             print("")
             print("    A) Static route via this VM (simplest, no WireGuard):")
-            print("           sudo route -n add \(MpdVirt.WireGuard.containerSubnet) \(canonicalIP)")
+            print("           sudo route -n add \(MpdVirt.WireGuard.containerSubnet) \(entry.ip)")
             print("")
             print("    B) WireGuard tunnel (encrypted, also works off-LAN):")
             let clientConf = MpdVirt.vmWireGuardConfFile(octet: entry.octet)
@@ -174,10 +173,10 @@ extension MpdVirt.Diag {
             switch pingResolveAndProbe("vm.service.mpd.test") {
             case .none:
                 warn("`vm.service.mpd.test` doesn't resolve — is this VM running an mpd version that publishes this record?")
-            case .some(let ip) where ip == canonicalIP:
+            case .some(let ip) where ip == entry.ip:
                 ok("`vm.service.mpd.test` → \(ip) — confirmed talking to \(entry.name)'s own dnsmasq")
             case .some(let ip):
-                warn("`vm.service.mpd.test` → \(ip), expected \(canonicalIP) — DNS is resolving via a different VM's dnsmasq")
+                warn("`vm.service.mpd.test` → \(ip), expected \(entry.ip) — DNS is resolving via a different VM's dnsmasq")
             }
         }
 
