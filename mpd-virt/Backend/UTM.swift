@@ -45,11 +45,6 @@ extension MpdVirt.UTM {
     private static let defaultDiskGiB   = 80
     private static let defaultCPUs      = 4
 
-    /// Hostname cloud-init sets on the freshly-booted VM (matches
-    /// `mpd-template-<suffix>` so the bootstrap's naming gate accepts
-    /// it). Bootstrap step 30 renames to `mpd-<NNN>` when it runs.
-    private static let cloudInitInitialHostname = "mpd-template-cloudinit"
-
     /// Per-VM staging dir for the materialized raw disk + cidata ISO
     /// before UTM imports them. Lives outside the UTM bundle so a half-
     /// failed import doesn't leave the .utm directory in a weird state.
@@ -113,7 +108,7 @@ extension MpdVirt.UTM {
             outputPath: seedPath,
             username: opts.username,
             sshPubKey: sshPubKey,
-            localHostname: cloudInitInitialHostname,
+            localHostname: target,
             networkConfig: networkConfig
         )
 
