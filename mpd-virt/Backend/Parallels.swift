@@ -282,7 +282,9 @@ extension MpdVirt.Parallels {
 
         // 2. By IP (only when caller provided one). Finds VMs that
         //    aren't yet renamed to the canonical form — the common
-        //    "adopt my hand-built VM" case.
+        //    "adopt my hand-built VM" case. Uses listAllVMs's
+        //    detailed-IP path so a sandbox VM with a manually-pinned
+        //    static IP still matches.
         if let hint = ipHint {
             let vms = try listAllVMs()
             if let found = vms.first(where: { $0.ip == hint }) {
@@ -326,25 +328,51 @@ extension MpdVirt.Parallels {
         let ip: String?
     }
 
-    /// Parse `prlctl list -a -j` into a flat list of (name, uuid, ip).
-    /// Used by preflight + afterCanonicalIPReady. Returns an empty
-    /// list when prlctl output isn't parseable so callers don't get
-    /// stuck on a bad parse — they'll just miss the conflict check,
-    /// which is acceptable for now (a real collision later still
-    /// surfaces a useful prlctl error).
+    /// Parse `prlctl list -a -j -i` (all VMs, JSON, full info) into a
+    /// flat list of (name, uuid, ip). Single call — the full-info JSON
+    /// carries the `Network.ipAddresses` block with the live IPv4
+    /// even when the brief `prlctl list` shows `IP_ADDR=-` (static
+    /// IPs that Parallels' DHCP agent didn't hand out).
+    ///
+    /// Returns an empty list when prlctl output isn't parseable; the
+    /// caller still gets a useful error from the real prlctl call
+    /// that follows.
     static func listAllVMs() throws -> [VMInfo] {
-        let out = try prl(["list", "-a", "-j"])
+        let out = try prl(["list", "-a", "-j", "-i"])
         guard let data = out.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return [] }
 
         return array.compactMap { dict in
-            guard let name = dict["name"] as? String,
-                  let uuid = dict["uuid"] as? String
+            // Field names are CAPITALIZED in the -i JSON output ("Name",
+            // "ID"), unlike the brief `-a -j` view that uses lowercase.
+            guard let name = dict["Name"] as? String,
+                  let uuid = dict["ID"] as? String
             else { return nil }
-            let ip = walkForSharedIP(dict)
+            // Prefer the structured Network.ipAddresses block; fall
+            // back to a deep walk for older Parallels versions where
+            // the JSON shape might differ.
+            let ip = ipv4FromNetwork(dict) ?? walkForSharedIP(dict)
             return VMInfo(name: name, uuid: uuid, ip: ip)
         }
+    }
+
+    /// Extract the first Shared-network IPv4 from the structured
+    /// `Network.ipAddresses: [{"type":"ipv4","ip":"…"},…]` field that
+    /// `prlctl list -i -j` writes. Returns nil if the field isn't
+    /// present or no entry matches our subnet.
+    static func ipv4FromNetwork(_ dict: [String: Any]) -> String? {
+        guard let network = dict["Network"] as? [String: Any],
+              let addrs = network["ipAddresses"] as? [[String: Any]]
+        else { return nil }
+        for entry in addrs {
+            if entry["type"] as? String == "ipv4",
+               let raw = entry["ip"] as? String,
+               let bare = matchSharedIP(in: raw) {
+                return bare
+            }
+        }
+        return nil
     }
 
     // MARK: - describe
