@@ -59,24 +59,26 @@ extension MpdVirt.Parallels {
         try requirePrlctl()
         let target = MpdVirt.vmName(octet: octet)
 
-        // Refuse to overwrite an existing VM with this name.
-        if (try? prl(["list", "-a", "-o", "name", "--no-header"]))?
-            .components(separatedBy: "\n")
-            .map({ $0.trimmingCharacters(in: .whitespaces) })
-            .contains(target) == true {
+        // Inventory both running VMs and Parallels templates in one
+        // shot — `prlctl set --template on` removes a VM from the
+        // regular `list -a` view, so a user who's "templified" their
+        // mpd-template-trixie source would trip the source-missing
+        // check otherwise.
+        let names = try allKnownNames()
+
+        // Refuse to overwrite an existing VM/template with this name.
+        if names.contains(target) {
             throw MpdVirt.BackendError.other("""
-                Parallels already has a VM named '\(target)'. Use \
+                Parallels already has a VM or template named '\(target)'. Use \
                 `mpd-virt delete \(MpdVirt.vmId(octet: octet))` first, or pick a different octet.
                 """)
         }
 
-        // Refuse if the source template doesn't exist.
-        if (try? prl(["list", "-a", "-o", "name", "--no-header"]))?
-            .components(separatedBy: "\n")
-            .map({ $0.trimmingCharacters(in: .whitespaces) })
-            .contains(template) != true {
+        // Refuse if the source template doesn't exist (as either a VM
+        // or a converted template).
+        if !names.contains(template) {
             throw MpdVirt.BackendError.other("""
-                Parallels has no VM named '\(template)'. Create the template VM first \
+                Parallels has no VM or template named '\(template)'. Build it first \
                 (Debian Trixie + GNOME + Parallels Tools), then re-run this command.
                 """)
         }
@@ -110,8 +112,8 @@ extension MpdVirt.Parallels {
         FileHandle.standardError.write(Data("  ▶ prlctl start \(target)\n".utf8))
         try prl(["start", target])
 
-        FileHandle.standardError.write(Data("  ▶ waiting for Parallels Tools to report a guest IP …\n".utf8))
-        let ip = try waitForGuestIP(target: target, timeoutSeconds: 120)
+        FileHandle.standardError.write(Data("  ▶ waiting for Parallels Tools to report a guest IP (up to 4 min) …\n".utf8))
+        let ip = try waitForGuestIP(target: target, timeoutSeconds: 240)
         let uuid = try readUUID(target: target)
         FileHandle.standardError.write(Data("  ▶ guest IP \(ip), uuid \(uuid)\n".utf8))
 
@@ -272,7 +274,26 @@ extension MpdVirt.Parallels {
         return (ip: reportedIP, uuid: uuid)
     }
 
-    // MARK: - list helper
+    // MARK: - list helpers
+
+    /// All names visible to prlctl — regular VMs (`list -a`) PLUS
+    /// templates (`list -t`). Parallels treats templates as a
+    /// separate listing; without checking both, a converted template
+    /// looks like it doesn't exist.
+    static func allKnownNames() throws -> Set<String> {
+        let vmNames = try (prl(["list", "-a", "-o", "name", "--no-header"]))
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        // `prlctl list -t` may not accept `--no-header`; the first line
+        // is a header on some Parallels versions. We strip a leading
+        // "NAME" line if present.
+        let tplLines = (try? prl(["list", "-t", "-o", "name", "--no-header"]))?
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && $0 != "NAME" } ?? []
+        return Set(vmNames + tplLines)
+    }
 
     struct VMInfo {
         let name: String
@@ -386,26 +407,28 @@ extension MpdVirt.Parallels {
     }
 
     /// Walk a prlctl JSON info dict looking for an IPv4 address on the
-    /// Parallels Shared network (10.211.55.x). Returns nil if absent.
-    /// The exact path varies by prlctl version, so this descends loosely.
-    private static func extractSharedIP(_ info: [String: Any]) -> String? {
-        // Try the well-known top-level "Hardware" -> "net*" path first.
+    /// Parallels Shared network (10.211.55.x). Returns the bare IP
+    /// (no CIDR suffix) or nil if absent. The exact path varies by
+    /// prlctl version, so this descends loosely.
+    static func extractSharedIP(_ info: [String: Any]) -> String? {
         if let hw = info["Hardware"] as? [String: Any] {
             for (_, v) in hw {
                 if let adapter = v as? [String: Any],
                    let ip = adapter["ip"] as? String,
-                   isParallelsSharedIP(ip) {
-                    return ip
+                   let match = matchSharedIP(in: ip) {
+                    return match
                 }
             }
         }
-        // Fall back to a recursive walk — scan every string value for
-        // the 10.211.55.x pattern.
         return walkForSharedIP(info)
     }
 
-    private static func walkForSharedIP(_ value: Any) -> String? {
-        if let s = value as? String, isParallelsSharedIP(s) { return s }
+    /// Recursively scan for the first Shared-network IPv4 in any
+    /// string value. Tolerates CIDR-suffixed values (e.g.
+    /// `10.211.55.155/24`) and mixed strings (e.g.
+    /// `10.211.55.155 - 2001:db8::1`).
+    static func walkForSharedIP(_ value: Any) -> String? {
+        if let s = value as? String, let ip = matchSharedIP(in: s) { return ip }
         if let arr = value as? [Any] {
             for item in arr { if let hit = walkForSharedIP(item) { return hit } }
         }
@@ -415,13 +438,27 @@ extension MpdVirt.Parallels {
         return nil
     }
 
-    /// Pure Swift "is this an IPv4 string in 10.211.55.0/24?".
-    private static func isParallelsSharedIP(_ s: String) -> Bool {
-        let parts = s.split(separator: ".")
-        guard parts.count == 4, parts[0] == "10", parts[1] == "211", parts[2] == "55" else {
-            return false
+    /// Find the first `10.211.55.<num>` occurrence inside an arbitrary
+    /// string, ignoring any trailing `/N` CIDR mask or non-IP suffix.
+    /// Returns the bare IP (`"10.211.55.155"`), or nil.
+    static func matchSharedIP(in s: String) -> String? {
+        // Manual scan — avoids NSRegularExpression for one tiny case.
+        // We want digits 0..255 in the last octet, but Parallels won't
+        // emit out-of-range octets so `[0-9]+` is enough.
+        let prefix = "10.211.55."
+        var idx = s.startIndex
+        while let range = s.range(of: prefix, range: idx..<s.endIndex) {
+            // After the prefix, consume the longest run of digits.
+            var end = range.upperBound
+            while end < s.endIndex, s[end].isASCII, s[end].isNumber {
+                end = s.index(after: end)
+            }
+            if end > range.upperBound {
+                return String(s[range.lowerBound..<end])
+            }
+            idx = range.upperBound
         }
-        return Int(parts[3]) != nil
+        return nil
     }
 
     // MARK: - Size parsing
