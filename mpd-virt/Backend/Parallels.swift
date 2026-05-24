@@ -183,7 +183,7 @@ extension MpdVirt.Parallels {
     /// from `clone()`/`create()` it's the UUID. For pure `setup` on
     /// a pre-existing Parallels VM, hint is nil and we look the VM up
     /// by its (now-canonical) IP.
-    static func afterCanonicalIPReady(octet: Int, hint: String?) throws {
+    static func afterCanonicalIPReady(octet: Int, hint: String?, user: String) throws {
         try requirePrlctl()
         let targetName = MpdVirt.vmName(octet: octet)
         let canonicalIP = "10.211.55.\(octet)"
@@ -224,28 +224,52 @@ extension MpdVirt.Parallels {
             // Fall through to suspend → rename → resume.
         }
 
-        // Deterministic path: suspend, rename, resume. Suspend keeps
-        // the in-memory state so the subsequent bootstrap steps (apt
-        // / make / mpd --setup) resume against the same kernel
-        // session — much faster than a stop/start cycle.
+        // Deterministic path: graceful stop, rename, start, wait for
+        // SSH. Parallels' power verbs (start, resume, pause, suspend,
+        // restart, reset, reset-uptime, stop) put us in `stopped`
+        // state via plain `stop` — that's what unlocks
+        // `prlctl set --name`. `--kill` is the forced equivalent
+        // we don't want here (could corrupt the in-flight bootstrap
+        // state on the guest disk).
         FileHandle.standardError.write(Data("""
-              ▸ Parallels refuses to rename a running VM. Suspending → rename → resume…
-                (≈10–20s; bootstrap continues once the VM is back up.)
+              ▸ Parallels refuses to rename a running VM. Stop → rename → start…
+                (≈30–60s for clean stop + boot; bootstrap resumes when SSH is back.)
 
             """.utf8))
-        try prl(["suspend", identifier])
+        try prl(["stop", identifier])
+        guard waitForState(identifier: identifier, target: "stopped", timeoutSeconds: 120) else {
+            throw MpdVirt.BackendError.other("""
+                Parallels VM \(identifier) did not reach state=stopped within 120s after \
+                `prlctl stop`. Renaming aborted; investigate the VM in Parallels.
+                """)
+        }
         try prl(["set", identifier, "--name", targetName])
         try prl(["start", identifier])
 
-        // Wait for the VM to be ICMP-reachable again so the next
-        // bootstrap step doesn't hit a still-resuming kernel.
-        if !waitForPing(ip: canonicalIP, timeoutSeconds: 60) {
-            FileHandle.standardError.write(Data("""
-                  ⚠ Renamed to '\(targetName)' but \(canonicalIP) didn't respond to ICMP within 60s.
-                    The next bootstrap step may fail; if so, re-run `mpd-virt setup`.
-
-                """.utf8))
+        // Wait for SSH (not just ICMP) — sshd comes up after the
+        // kernel and userspace, so ping-then-ssh would race.
+        let sshTarget = MpdVirt.Host.Ssh.Target(user: user, host: canonicalIP)
+        if !MpdVirt.Host.Ssh.waitUntilReachable(sshTarget, timeoutSeconds: 120) {
+            throw MpdVirt.BackendError.other("""
+                Renamed to '\(targetName)' but SSH at \(user)@\(canonicalIP) didn't \
+                come up within 120s. Investigate via Parallels Desktop.
+                """)
         }
+    }
+
+    /// Poll `prlctl status <id>` until it reports the desired state
+    /// (`stopped`, `running`, etc.) or the deadline passes. The
+    /// status line shape is `VM '<name>' exist <state>`.
+    private static func waitForState(identifier: String, target: String, timeoutSeconds: Int) -> Bool {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        while Date() < deadline {
+            if let out = try? prl(["status", identifier]),
+               out.contains(" \(target)") {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 2)
+        }
+        return false
     }
 
     /// True iff a prlctl error message indicates the VM is busy or
@@ -257,21 +281,6 @@ extension MpdVirt.Parallels {
             || msg.contains("virtual machine is currently running")
     }
 
-    /// Poll `/sbin/ping -c 1` until the host responds or the deadline
-    /// passes. Each ping attempt is itself bounded at 2s so we don't
-    /// spin forever waiting on a single slow round-trip.
-    private static func waitForPing(ip: String, timeoutSeconds: Int) -> Bool {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
-        while Date() < deadline {
-            let r = MpdVirt.Host.Ssh.runWithTimeout(
-                argv: ["/sbin/ping", "-c", "1", "-W", "1000", "-t", "2", ip],
-                timeoutSeconds: 2.0
-            )
-            if r.exitCode == 0 && !r.timedOut { return true }
-            Thread.sleep(forTimeInterval: 2)
-        }
-        return false
-    }
 
     // MARK: - diag printRegistry extras
 

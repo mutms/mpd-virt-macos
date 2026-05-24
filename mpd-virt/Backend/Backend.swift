@@ -193,10 +193,13 @@ extension MpdVirt {
         /// current name) for the just-cloned/created VM. Setup passes
         /// it through from create/clone's Provisioned. Backends that
         /// don't have it can fall back to finding the VM by IP.
-        func afterCanonicalIPReady(octet: Int, hint: String?) throws {
+        /// `user` is the dev user the bootstrap is SSH-ing as — some
+        /// backends (Parallels' rename path) need to bounce the VM
+        /// and re-probe SSH afterward.
+        func afterCanonicalIPReady(octet: Int, hint: String?, user: String) throws {
             switch self {
-            case .parallels: try MpdVirt.Parallels.afterCanonicalIPReady(octet: octet, hint: hint)
-            case .utm:       try MpdVirt.UTM.afterCanonicalIPReady(octet: octet, hint: hint)
+            case .parallels: try MpdVirt.Parallels.afterCanonicalIPReady(octet: octet, hint: hint, user: user)
+            case .utm:       try MpdVirt.UTM.afterCanonicalIPReady(octet: octet, hint: hint, user: user)
             case .general:   break
             }
         }

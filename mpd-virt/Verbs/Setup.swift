@@ -144,7 +144,7 @@ extension MpdVirt.Setup {
                     // Backend-specific post-rename work (Parallels:
                     // rename Parallels VM to mpd-<NNN> so the GUI
                     // label matches the guest hostname).
-                    try backend.afterCanonicalIPReady(octet: octet, hint: uuid)
+                    try backend.afterCanonicalIPReady(octet: octet, hint: uuid, user: username)
 
                     let entry = MpdVirt.Registry.Entry(
                         octet: octet,

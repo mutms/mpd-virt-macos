@@ -38,7 +38,7 @@ extension MpdVirt.UTM {
         // does. Until then preflight is permissive (won't block setup).
     }
 
-    static func afterCanonicalIPReady(octet: Int, hint: String?) throws {
+    static func afterCanonicalIPReady(octet: Int, hint: String?, user: String) throws {
         // Stub — UTM identifies VMs by .utm-bundle paths; rename
         // behavior lands when UTM provisioning does.
     }
