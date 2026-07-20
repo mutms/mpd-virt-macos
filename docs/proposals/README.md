@@ -10,11 +10,19 @@ in-VM `mpd` binary's proposals (if any) live in
 
 ## Index
 
+- [`per-vm-addressing-and-wireguard-removal.md`](per-vm-addressing-and-wireguard-removal.md) —
+  Per-VM DNS zones (`222.mpd.test`) and container subnets
+  (`10.163.222.0/24`), with reachability via a persistent static route
+  instead of WireGuard. Makes concurrent VMs possible and frees the
+  Mac's single tunnel slot for other VPNs. Cross-repo: ships in
+  lockstep with the matching change in the mpd repo.
 - [`macos-host-state-and-wireguard.md`](macos-host-state-and-wireguard.md) —
   State model + WireGuard architecture for the macOS host. Defines
   `~/.mpd-virt/conf/` for persistent identity, `~/.mpd-virt/<octet>/`
   for per-VM bookkeeping, and a WireGuard-based networking model that
-  eliminates daily sudo.
+  eliminates daily sudo. **The WireGuard half is superseded** by
+  `per-vm-addressing-and-wireguard-removal.md`; the state model
+  stands.
 - [`mpd-virt.md`](mpd-virt.md) — `mpd-virt`'s verb surface, sudo-recipe
   UX, VM identity model (octet as canonical key), and the
   Parallels-Desktop-Pro backend specifics.
