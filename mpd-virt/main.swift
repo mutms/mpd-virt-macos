@@ -269,7 +269,7 @@ struct UpdateCmd: ParsableCommand {
 struct UninstallCmd: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "uninstall",
-        abstract: "Remove the persistent host-side trust material (CA in System Keychain, ~/.mpd-virt/conf/, any legacy /etc/resolver/mpd.test)."
+        abstract: "Remove the persistent host-side trust material (CA in System Keychain, ~/.mpd-virt/conf/, every /etc/resolver/<id>.mpd.test)."
     )
 
     @Flag(name: .customLong("force"), help: "Proceed even when VMs are still registered (leaves SSH config blocks dangling).")

@@ -16,13 +16,14 @@
 //   5. SSH config block re-asserted; ssh-by-alias `mpd-NNN` probed.
 //
 //   --- optional (only in interactive mode) ---
-//   6. /etc/resolver/mpd.test exists and points at the container DNS.
-//   7. Routing to the container subnet — reachability AND identity:
-//      every mpd VM serves the same 10.163.0.0/24 with dnsmasq on
-//      10.163.0.3, so a ping proves only that *some* VM is on the
-//      other end. We ask that dnsmasq directly (dig, bypassing
-//      /etc/resolver) which VM it belongs to.
-//   8. End-to-end: curl https://mpd.test/ and read the VM id back
+//   6. /etc/resolver/<id>.mpd.test exists and points at this VM's
+//      dnsmasq.
+//   7. Routing to this VM's container subnet. Each VM has its own /24,
+//      so reaching 10.163.<id>.3 at all already implies it is this VM's
+//      dnsmasq. We still ask it directly (dig, bypassing /etc/resolver)
+//      for `vm.service.<zone>` — one packet, and it confirms the answer
+//      comes from the VM we think it does.
+//   8. End-to-end: curl https://<id>.mpd.test/ and read the VM id back
 //      out of the portal's page title — resolver + routing + portal
 //      + CA trust in a single real transaction.
 //   If 7 or 8 fails: walk the dev through the static route that
@@ -114,69 +115,79 @@ extension MpdVirt.Diag {
         // after; non-interactive mode just prints the suggested
         // commands and moves on. That keeps `mpd-virt setup` (which
         // runs diag non-interactively) informative — the dev still
-        // sees exactly what's left to do for *.mpd.test traffic to
-        // reach the VM, without the workflow blocking on a prompt.
+        // sees exactly what's left to do for this VM's zone to
+        // reach it, without the workflow blocking on a prompt.
 
         // Three INDEPENDENT checks. Resolver file existence and
         // routing reachability are orthogonal: you can have either
         // without the other. Reporting them as separate sections
         // tells the dev exactly which one needs fixing.
 
-        section("/etc/resolver/mpd.test (scoped DNS for *.mpd.test)")
-        if resolverFileLooksRight() {
-            ok("/etc/resolver/mpd.test → nameserver \(MpdVirt.Net.containerDNS)")
+        let vmOctet = entry.octet
+        let zone = MpdVirt.Net.zone(octet: vmOctet)
+        let dns = MpdVirt.Net.containerDNS(octet: vmOctet)
+        let subnet = MpdVirt.Net.containerSubnet(octet: vmOctet)
+        let resolverFile = MpdVirt.Net.resolverFile(octet: vmOctet)
+
+        section("\(resolverFile) (scoped DNS for *.\(zone))")
+        if resolverFileLooksRight(octet: vmOctet) {
+            ok("\(resolverFile) → nameserver \(dns)")
         } else {
-            warn("/etc/resolver/mpd.test missing or doesn't point at \(MpdVirt.Net.containerDNS)")
-            print("    Paste to create it (macOS scopes this — only *.mpd.test queries go to the VM):")
+            warn("\(resolverFile) missing or doesn't point at \(dns)")
+            print("    Paste to create it (macOS scopes this — only *.\(zone) queries go to this VM):")
             print("        sudo mkdir -p /etc/resolver")
-            print("        echo \"nameserver \(MpdVirt.Net.containerDNS)\" | sudo tee /etc/resolver/mpd.test")
-            promptReTest(nonInteractive: nonInteractive, label: "/etc/resolver/mpd.test") {
-                resolverFileLooksRight()
+            print("        echo \"nameserver \(dns)\" | sudo tee \(resolverFile)")
+            promptReTest(nonInteractive: nonInteractive, label: resolverFile) {
+                resolverFileLooksRight(octet: vmOctet)
             }
         }
+        // Left over from when every VM shared one flat `mpd.test` zone.
+        // Harmless for this VM (longest-suffix match means the per-VM file
+        // still wins), but it sends bare *.mpd.test lookups to an address
+        // that no longer answers.
+        if FileManager.default.fileExists(atPath: MpdVirt.Net.legacyResolverFile) {
+            warn("\(MpdVirt.Net.legacyResolverFile) is left over from before per-VM zones")
+            print("        sudo rm -f \(MpdVirt.Net.legacyResolverFile)")
+        }
 
-        // Reachability is necessary but NOT sufficient. Every mpd VM
-        // serves the same 10.163.0.0/24 with dnsmasq on the same
-        // 10.163.0.3, so once any one VM's route is up,
-        // the ping succeeds no matter which VM we're diagnosing — and
-        // all *.mpd.test traffic silently lands on that other VM. So
-        // after the ping we ask the dnsmasq we just reached who it
-        // belongs to, via `dig` straight at 10.163.0.3. dig ignores
-        // /etc/resolver, which is exactly what we want here: the answer
-        // describes the ROUTE, not the resolver config (checked above).
-        section("Routing to \(MpdVirt.Net.containerSubnet) (so the resolver can reach \(MpdVirt.Net.containerDNS))")
-        if !pingOK(MpdVirt.Net.containerDNS) {
-            warn("\(MpdVirt.Net.containerDNS) NOT reachable — add the static route:")
+        // This VM's /24 is its own, so a reply from 10.163.<id>.3 can only
+        // be this VM's dnsmasq — cross-VM confusion is structurally
+        // impossible now, where under the old shared 10.163.0.0/24 it was
+        // the normal failure mode. We still ask the dnsmasq we reached who
+        // it is, via `dig` straight at it: one packet, and it proves the
+        // answer came from the VM's own records. dig ignores
+        // /etc/resolver, so this describes the ROUTE, with the resolver
+        // config (checked above) factored out.
+        section("Routing to \(subnet) (so the resolver can reach \(dns))")
+        if !pingOK(dns) {
+            warn("\(dns) NOT reachable — add the static route:")
             printRoutingFix(entry: entry)
-            promptReTest(nonInteractive: nonInteractive, label: "routing to \(MpdVirt.Net.containerDNS)") {
-                pingOK(MpdVirt.Net.containerDNS)
+            promptReTest(nonInteractive: nonInteractive, label: "routing to \(dns)") {
+                pingOK(dns)
             }
         } else {
-            switch dnsmasqIdentity() {
+            switch dnsmasqIdentity(octet: vmOctet) {
             case .some(let ip) where ip == entry.ip:
-                ok("\(MpdVirt.Net.containerDNS) reachable — and it's \(entry.name)'s own dnsmasq (\(entry.ip))")
+                ok("\(dns) reachable — and it's \(entry.name)'s own dnsmasq (\(entry.ip))")
             case .some(let ip):
-                warn("\(MpdVirt.Net.containerDNS) answers, but it's a DIFFERENT VM's dnsmasq (\(ip)) — not \(entry.name) (\(entry.ip))")
-                print("    Every mpd VM serves the same \(MpdVirt.Net.containerSubnet), so all *.mpd.test")
-                print("    traffic is currently landing on \(ip). Repoint it at \(entry.name):")
-                print("")
-                printRoutingFix(entry: entry)
-                promptReTest(nonInteractive: nonInteractive, label: "routing to \(entry.name)") {
-                    dnsmasqIdentity() == entry.ip
-                }
+                // Can't be another VM: this subnet belongs to this one.
+                // So the registry's record of the VM's LAN IP is stale.
+                warn("\(dns) answers with \(ip), but the registry says \(entry.name) is \(entry.ip)")
+                print("    \(subnet) is unique to \(entry.name), so this is IP drift, not a wrong route.")
+                print("    Reconcile with: mpd-virt setup \(MpdVirt.vmId(octet: vmOctet))")
             case .none:
                 // Route works, but the VM publishes no identity record:
                 // older mpd, or a sandbox VM (mpd only emits
-                // host-record=vm.service.mpd.test when MPD_VM_IP is set).
-                warn("\(MpdVirt.Net.containerDNS) reachable, but it doesn't answer for `vm.service.mpd.test` —")
-                print("    can't confirm the route lands on \(entry.name). Is another VM's route active?")
+                // host-record=vm.service.<zone> when MPD_VM_IP is set).
+                warn("\(dns) reachable, but it doesn't answer for `\(MpdVirt.Net.vmServiceRecord(octet: vmOctet))` —")
+                print("    routing looks right; this VM just publishes no identity record (sandbox, or older mpd).")
             }
         }
 
         // CA trust — purely for Safari/curl UX, never blocks. Always
         // print the trust command when missing, regardless of mode.
         // Checked BEFORE the end-to-end section because that section
-        // curls https://mpd.test/: an untrusted CA fails the TLS
+        // curls the zone apex: an untrusted CA fails the TLS
         // handshake, and we'd rather the dev has already seen the real
         // cause than read it as a routing problem.
         section("CA trust in System Keychain (for Safari / curl)")
@@ -188,8 +199,8 @@ extension MpdVirt.Diag {
             print("        sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \(MpdVirt.CA.certPath)")
         }
 
-        section("End-to-end *.mpd.test")
-        if !resolverFileLooksRight() || !pingOK(MpdVirt.Net.containerDNS) {
+        section("End-to-end *.\(zone)")
+        if !resolverFileLooksRight(octet: vmOctet) || !pingOK(dns) {
             print("    skipped — resolver file or routing still missing (see above)")
         } else {
             // The real transaction, not a proxy for it: fetch the portal
@@ -208,28 +219,29 @@ extension MpdVirt.Diag {
             // `mpd-NNN`. Ugly, but deterministic and near the top of the
             // response.
             let expectedID = MpdVirt.vmId(octet: entry.octet)
-            let portal = portalIdentity()
+            let portal = portalIdentity(octet: vmOctet)
+            let url = "https://\(zone)/"
             switch portal.vmId {
             case .some(let id) where id == expectedID:
-                ok("`curl https://mpd.test/` → mpd-\(id) — resolver + routing + portal + TLS all live")
+                ok("`curl \(url)` → mpd-\(id) — resolver + routing + portal + TLS all live")
             case .some(let id):
-                warn("`curl https://mpd.test/` → mpd-\(id), expected mpd-\(expectedID) — you're browsing the WRONG VM")
-                print("    Same cause as the routing section above: fix the route, then re-run.")
+                warn("`curl \(url)` → mpd-\(id), expected mpd-\(expectedID) — another VM is answering for this zone")
+                print("    Each VM owns its own zone, so \(zone) is resolving somewhere unexpected.")
             case .none:
                 switch portal.exitCode {
                 case 6:
-                    warn("`curl https://mpd.test/` couldn't resolve the name — DNS path is broken despite /etc/resolver looking right")
+                    warn("`curl \(url)` couldn't resolve the name — DNS path is broken despite \(resolverFile) looking right")
                     print("    Try: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder")
                 case 7, 28:
-                    warn("`curl https://mpd.test/` couldn't connect (curl \(portal.exitCode)) — DNS resolves but the portal isn't reachable")
-                    print("    Routing to 10.163.0.4 (the portal container), or the portal isn't running in \(entry.name).")
+                    warn("`curl \(url)` couldn't connect (curl \(portal.exitCode)) — DNS resolves but the portal isn't reachable")
+                    print("    Routing to \(MpdVirt.Net.containerPortal(octet: vmOctet)) (the portal container), or the portal isn't running in \(entry.name).")
                 case 35, 51, 60:
-                    warn("`curl https://mpd.test/` failed TLS verification (curl \(portal.exitCode)) — '\(MpdVirt.CA.commonName)' isn't trusted by this Mac")
+                    warn("`curl \(url)` failed TLS verification (curl \(portal.exitCode)) — '\(MpdVirt.CA.commonName)' isn't trusted by this Mac")
                     print("    See the CA trust section above.")
                 case 0:
-                    warn("`curl https://mpd.test/` answered, but the page has no `mpd-NNN` title — is that really the mpd portal?")
+                    warn("`curl \(url)` answered, but the page has no `mpd-NNN` title — is that really the mpd portal?")
                 default:
-                    warn("`curl https://mpd.test/` failed (curl exit \(portal.exitCode))")
+                    warn("`curl \(url)` failed (curl exit \(portal.exitCode))")
                 }
             }
         }
@@ -239,15 +251,16 @@ extension MpdVirt.Diag {
 
     // MARK: - Routing remediation
 
-    /// The one way to put \(containerSubnet) on this Mac: a static route
-    /// via the VM's LAN IP. Printed when nothing routes there at all, and
-    /// again when the subnet routes to the WRONG VM (same fix — the
-    /// delete-then-add repoints an existing route).
+    /// The one way to put this VM's /24 on this Mac: a static route via
+    /// the VM's LAN IP. The delete-then-add form also repoints a route
+    /// left over from a previous IP.
     ///
-    /// Note this doesn't survive a reboot; making it persistent is the
-    /// subject of docs/proposals/per-vm-addressing-and-wireguard-removal.md.
+    /// Deliberately not persistent across reboots — re-add it when you
+    /// need it. Automating that (a LaunchDaemon) is held back until the
+    /// manual step proves annoying enough to be worth the machinery.
     private static func printRoutingFix(entry: MpdVirt.Registry.Entry) {
-        print("        sudo route -n delete \(MpdVirt.Net.containerSubnet) 2>/dev/null; sudo route -n add \(MpdVirt.Net.containerSubnet) \(entry.ip)")
+        let subnet = MpdVirt.Net.containerSubnet(octet: entry.octet)
+        print("        sudo route -n delete \(subnet) 2>/dev/null; sudo route -n add \(subnet) \(entry.ip)")
     }
 
     /// Interactive re-test prompt. After printing a fix, optionally
@@ -268,16 +281,16 @@ extension MpdVirt.Diag {
         }
     }
 
-    /// True iff /etc/resolver/mpd.test exists and contains the expected
-    /// nameserver line. Loose match (any line `nameserver 10.163.0.3`)
+    /// True iff this VM's resolver file exists and contains the expected
+    /// nameserver line. Loose match (any line `nameserver 10.163.<id>.3`)
     /// so a hand-edited file with comments or extra options still
     /// passes the check.
-    private static func resolverFileLooksRight() -> Bool {
-        let path = "/etc/resolver/mpd.test"
+    private static func resolverFileLooksRight(octet: Int) -> Bool {
+        let path = MpdVirt.Net.resolverFile(octet: octet)
         guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else {
             return false
         }
-        let needle = "nameserver \(MpdVirt.Net.containerDNS)"
+        let needle = "nameserver \(MpdVirt.Net.containerDNS(octet: octet))"
         return raw.split(whereSeparator: { $0 == "\n" }).contains { line in
             line.trimmingCharacters(in: .whitespaces) == needle
         }
@@ -286,7 +299,7 @@ extension MpdVirt.Diag {
     // MARK: - Probes
     //
     // All probes share a 2-second hard cap. /etc/resolver pointing at
-    // an unreachable 10.163.0.3 makes dscacheutil block for the full
+    // an unreachable dnsmasq makes dscacheutil block for the full
     // 30+ second DNS timeout; ssh likewise blocks on a half-open TCP.
     // Diag is a fast survey — we don't want it to hang.
 
@@ -325,20 +338,21 @@ extension MpdVirt.Diag {
         return r.exitCode == 0 && !r.timedOut
     }
 
-    /// Ask the dnsmasq we can currently reach at 10.163.0.3 which VM it
-    /// belongs to. Returns the IP from its `vm.service.mpd.test` record
-    /// (mpd emits `host-record=vm.service.mpd.test,<MPD_VM_IP>`), or nil
-    /// if it doesn't answer for that name — an older mpd, or a sandbox
-    /// VM, which skips the record because it has no static IP.
+    /// Ask this VM's dnsmasq which VM it belongs to. Returns the IP from
+    /// its `vm.service.<zone>` record (mpd emits
+    /// `host-record=vm.service.<zone>,<MPD_VM_IP>`), or nil if it doesn't
+    /// answer for that name — an older mpd, or a sandbox VM, which skips
+    /// the record because it has no static IP.
     ///
-    /// `dig` deliberately: it talks to 10.163.0.3 directly and ignores
-    /// /etc/resolver, so a wrong answer here means the ROUTE is wrong,
-    /// with the resolver config factored out.
-    private static func dnsmasqIdentity() -> String? {
+    /// `dig` deliberately: it talks to the container DNS directly and
+    /// ignores /etc/resolver, so the answer describes the route with the
+    /// resolver config factored out.
+    private static func dnsmasqIdentity(octet: Int) -> String? {
         let r = MpdVirt.Host.Ssh.runWithTimeout(
             argv: [
                 "/usr/bin/dig", "+short", "+time=1", "+tries=1",
-                "@\(MpdVirt.Net.containerDNS)", "vm.service.mpd.test", "A",
+                "@\(MpdVirt.Net.containerDNS(octet: octet))",
+                MpdVirt.Net.vmServiceRecord(octet: octet), "A",
             ],
             timeoutSeconds: probeTimeoutSec
         )
@@ -357,9 +371,10 @@ extension MpdVirt.Diag {
     /// so the caller can tell apart the failure modes: 6 = DNS, 7 =
     /// connect refused/unreachable, 28 = timeout, 35/51/60 = TLS (i.e.
     /// the mpd Root CA isn't trusted on this Mac).
-    private static func portalIdentity() -> (vmId: String?, exitCode: Int32) {
+    private static func portalIdentity(octet: Int) -> (vmId: String?, exitCode: Int32) {
         let r = MpdVirt.Host.Ssh.runWithTimeout(
-            argv: ["/usr/bin/curl", "-sS", "--max-time", "3", "https://mpd.test/"],
+            argv: ["/usr/bin/curl", "-sS", "--max-time", "3",
+                   "https://\(MpdVirt.Net.zone(octet: octet))/"],
             timeoutSeconds: httpProbeTimeoutSec
         )
         if r.timedOut { return (nil, 28) }

@@ -5,8 +5,9 @@
 //   delete   <NNN>   — removes one VM + its registry entry; preserves
 //                       conf/ (the CA persists).
 //   uninstall        — removes everything per-machine: CA from System
-//                       Keychain, /etc/resolver/mpd.test, any static
-//                       route to the container subnet, ~/.mpd-virt/conf/
+//                       Keychain, every /etc/resolver/<id>.mpd.test,
+//                       every static route to an mpd container subnet,
+//                       ~/.mpd-virt/conf/
 //                       (CA files, backend.env), and (with --force) any
 //                       leftover per-VM dirs.
 //
@@ -47,7 +48,23 @@ extension MpdVirt.Uninstall {
         // calls it twice (once for the printed recipe, once after the
         // optional manual pause), so anything the dev did by hand
         // drops out automatically.
-        let resolverFile = "/etc/resolver/mpd.test"
+        // Per-VM addressing means there is no single resolver file and no
+        // single route to clean up — each VM has its own of both. Candidate
+        // octets come from the registry *and* from whatever `/etc/resolver`
+        // still holds, so a VM deleted earlier (registry entry gone, its
+        // resolver file left behind) is still cleaned up here.
+        let candidateOctets = Array(Set(known + discoverResolverOctets())).sorted()
+
+        func pendingResolverFiles() -> [String] {
+            let perVM = candidateOctets.map { MpdVirt.Net.resolverFile(octet: $0) }
+            return (perVM + [MpdVirt.Net.legacyResolverFile])
+                .filter { fm.fileExists(atPath: $0) }
+        }
+        func pendingRoutes() -> [String] {
+            let perVM = candidateOctets.map { MpdVirt.Net.containerSubnet(octet: $0) }
+            return (perVM + [MpdVirt.Net.legacySubnet]).filter { hasRoute($0) }
+        }
+
         let buildSteps: () -> [MpdVirt.Host.SudoRecipe.Step] = {
             var s: [MpdVirt.Host.SudoRecipe.Step] = []
             if MpdVirt.Host.Keychain.isTrusted() {
@@ -60,16 +77,16 @@ extension MpdVirt.Uninstall {
                     ]
                 ))
             }
-            if fm.fileExists(atPath: resolverFile) {
+            for file in pendingResolverFiles() {
                 s.append(MpdVirt.Host.SudoRecipe.Step(
-                    title: "Remove \(resolverFile)",
-                    argv: ["/bin/rm", "-f", resolverFile]
+                    title: "Remove \(file)",
+                    argv: ["/bin/rm", "-f", file]
                 ))
             }
-            if hasContainerSubnetRoute() {
+            for subnet in pendingRoutes() {
                 s.append(MpdVirt.Host.SudoRecipe.Step(
-                    title: "Remove static route to \(MpdVirt.Net.containerSubnet)",
-                    argv: ["/sbin/route", "-n", "delete", MpdVirt.Net.containerSubnet]
+                    title: "Remove static route to \(subnet)",
+                    argv: ["/sbin/route", "-n", "delete", subnet]
                 ))
             }
             return s
@@ -82,15 +99,17 @@ extension MpdVirt.Uninstall {
         } else {
             MpdVirt.Ui.info("CA not in System Keychain")
         }
-        if fm.fileExists(atPath: resolverFile) {
-            ok("\(resolverFile) present")
+        let foundResolvers = pendingResolverFiles()
+        if foundResolvers.isEmpty {
+            MpdVirt.Ui.info("no mpd resolver files in /etc/resolver")
         } else {
-            MpdVirt.Ui.info("\(resolverFile) not present")
+            for file in foundResolvers { ok("\(file) present") }
         }
-        if hasContainerSubnetRoute() {
-            ok("static route to \(MpdVirt.Net.containerSubnet) present")
+        let foundRoutes = pendingRoutes()
+        if foundRoutes.isEmpty {
+            MpdVirt.Ui.info("no static routes to mpd container subnets")
         } else {
-            MpdVirt.Ui.info("no static route to \(MpdVirt.Net.containerSubnet)")
+            for subnet in foundRoutes { ok("static route to \(subnet) present") }
         }
         if initialSteps.isEmpty {
             MpdVirt.Ui.info("nothing root-owned to clean up")
@@ -152,29 +171,47 @@ extension MpdVirt.Uninstall {
         ok("uninstall complete.")
     }
 
-    /// True iff macOS's route table has an entry for the container
-    /// subnet. `route -n get` exits 0 when a matching route exists
-    /// (the default route doesn't satisfy a `/24` lookup).
-    private static func hasContainerSubnetRoute() -> Bool {
+    /// Octets that `/etc/resolver` still has a zone file for. Filenames
+    /// are the match domain — `150.mpd.test` — so the VM id is the first
+    /// label. Catches VMs whose registry entry is already gone but whose
+    /// resolver file was left behind.
+    private static func discoverResolverOctets() -> [Int] {
+        let suffix = ".\(MpdVirt.Net.rootDomain)"
+        guard let entries = try? FileManager.default
+            .contentsOfDirectory(atPath: "/etc/resolver") else { return [] }
+        return entries.compactMap { name in
+            guard name.hasSuffix(suffix) else { return nil }
+            let label = String(name.dropLast(suffix.count))
+            guard label.count == 3, let octet = Int(label) else { return nil }
+            return octet
+        }
+    }
+
+    /// True iff macOS's route table has an entry for `subnet`.
+    /// `route -n get` exits 0 when a matching route exists (the default
+    /// route doesn't satisfy a `/24` lookup).
+    private static func hasRoute(_ subnet: String) -> Bool {
         let r = MpdVirt.Host.Ssh.runWithTimeout(
-            argv: ["/sbin/route", "-n", "get", MpdVirt.Net.containerSubnet],
+            argv: ["/sbin/route", "-n", "get", subnet],
             timeoutSeconds: 2.0
         )
         if r.timedOut || r.exitCode != 0 { return false }
         // `route -n get` returns 0 even when only the default route
         // matches. To detect a SPECIFIC route we check the "destination"
-        // line in its output — should match exactly.
+        // line in its output.
+        //
+        // Matching on the shared `10.163.` prefix rather than the exact
+        // subnet is deliberate: macOS prints the destination in
+        // abbreviated form (`10.163.150`), which never equals the CIDR we
+        // asked about. Any 10.163.* destination means *some* mpd route
+        // matched, and uninstall wants all of them gone anyway.
         for line in r.stdout.split(whereSeparator: { $0 == "\n" }) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("destination:") {
                 let dest = trimmed
                     .dropFirst("destination:".count)
                     .trimmingCharacters(in: .whitespaces)
-                // Match the literal subnet (e.g. "10.163.0.0") or any
-                // host inside it ("10.163.x.x"). We installed
-                // 10.163.0.0/24 so a /24-rooted destination is the
-                // match we want.
-                return dest.hasPrefix("10.163.")
+                return dest.hasPrefix("\(MpdVirt.Net.subnetPrefix).")
             }
         }
         return false

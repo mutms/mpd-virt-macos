@@ -43,7 +43,12 @@ extension MpdVirt.Host.SSHConfig {
         for runtime in runtimes {
             lines.append("")
             lines.append("Host \(name)-\(runtime)")
-            lines.append("    HostName \(runtime).runtime.mpd.test")
+            // Per-VM zone, so two VMs' blocks name different hosts even
+            // though both have a `php` runtime. The alias (`mpd-150-php`)
+            // is deliberately NOT itself a resolvable name — it stays a
+            // pure ssh_config alias, and the resolvable name appears only
+            // as HostName, reached through the ProxyJump.
+            lines.append("    HostName \(MpdVirt.Net.runtimeHost(runtime, octet: octet))")
             lines.append("    User \(user)")
             lines.append("    ProxyJump \(name)")
             lines.append("    StrictHostKeyChecking no")
