@@ -15,10 +15,7 @@
 //
 // What delete deliberately does NOT touch:
 //   - The CA at `~/.mpd-virt/conf/caroot/` (per-machine; uninstall's job).
-//   - The shared WG identity at `~/.mpd-virt/conf/wireguard/{mac,vm}.*`
-//     (shared across every VM on this Mac; uninstall's job).
-//   - The WG.app tunnel import — no public CLI for it, we just print a
-//     hint pointing the dev at the (-) button in WG.app.
+//   - Any static route to the container subnet (per-machine; uninstall's job).
 
 import Foundation
 
@@ -76,12 +73,6 @@ extension MpdVirt.Delete {
         try MpdVirt.Registry.remove(octet: octet)
         ok("removed \(MpdVirt.vmDir(octet: octet))")
 
-        // 4. WG tunnel — manual cleanup. WG.app has no CLI for it.
-        section("WireGuard.app tunnel (manual cleanup)")
-        warn("open WireGuard.app and remove the tunnel '\(entry.name)' if it's still there")
-        MpdVirt.Ui.indent("The shared mpd WG identity at \(MpdVirt.wireGuardDir)/{mac,vm}.* is")
-        MpdVirt.Ui.indent("preserved (used by every VM on this Mac).")
-
         print("")
         ok("delete \(entry.name) complete.")
     }
@@ -91,6 +82,5 @@ extension MpdVirt.Delete {
     private static func header(_ s: String) { MpdVirt.Ui.header(s) }
     private static func section(_ s: String) { MpdVirt.Ui.section(s) }
     private static func ok(_ s: String) { MpdVirt.Ui.ok(s) }
-    private static func warn(_ s: String) { MpdVirt.Ui.warn(s) }
     private static func fail(_ s: String) { MpdVirt.Ui.fail(s) }
 }

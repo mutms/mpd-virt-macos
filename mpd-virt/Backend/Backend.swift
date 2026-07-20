@@ -26,7 +26,7 @@ extension MpdVirt {
         /// own file; this just dispatches. The bootstrap's
         /// `30-networking.sh` pins a static IP at
         /// `<canonicalSubnet>.<NNN>`; everything mpd-virt computes
-        /// downstream (SSH targets, WG endpoint, ping probes) derives
+        /// downstream (SSH targets, static route, ping probes) derives
         /// from this.
         var canonicalSubnet: String {
             switch self {

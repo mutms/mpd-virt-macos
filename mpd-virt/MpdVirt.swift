@@ -24,15 +24,12 @@ enum MpdVirt {
     static var rootDir: String { "\(homeDir)/.mpd-virt" }
 
     /// Persistent identity dir: `~/.mpd-virt/conf/`.
-    /// CA, WG keys, service certs, default-backend file. Survives every
+    /// CA, service certs, default-backend file. Survives every
     /// `mpd-virt delete <octet>`.
     static var confDir: String { "\(rootDir)/conf" }
 
     /// CA root keypair: `~/.mpd-virt/conf/caroot/`.
     static var caRootDir: String { "\(confDir)/caroot" }
-
-    /// WireGuard keys + configs: `~/.mpd-virt/conf/wireguard/`.
-    static var wireGuardDir: String { "\(confDir)/wireguard" }
 
     /// Service certificate dir: `~/.mpd-virt/conf/service/`.
     static var serviceCertDir: String { "\(confDir)/service" }
@@ -42,7 +39,7 @@ enum MpdVirt {
     static var backendConfFile: String { "\(confDir)/backend.env" }
 
     /// 3-digit string form of an octet (`"159"`, `"100"`, …). Same shape
-    /// used for VM names, host directories, SSH aliases, WG tunnel names.
+    /// used for VM names, host directories and SSH aliases.
     static func vmId(octet: Int) -> String { String(format: "%03d", octet) }
 
     /// Per-VM bookkeeping dir: `~/.mpd-virt/<NNN>/`. The presence of
@@ -53,21 +50,8 @@ enum MpdVirt {
     /// Per-VM env file: `~/.mpd-virt/<NNN>/env`. See Registry.swift.
     static func vmEnvFile(octet: Int) -> String { "\(vmDir(octet: octet))/env" }
 
-    /// Per-VM WireGuard server conf: `~/.mpd-virt/<NNN>/wireguard.conf`.
-    /// The one file we scp into the VM at /var/lib/mpd/conf/wireguard/mpd0.conf.
-    /// (Mac-side client.conf / WG.app import is deferred — separate concern.)
-    static func vmWireGuardConfFile(octet: Int) -> String {
-        "\(vmDir(octet: octet))/wireguard.conf"
-    }
-
     /// Convention: VM name everywhere is `mpd-<NNN>` (3-digit padded).
     static func vmName(octet: Int) -> String { "mpd-\(vmId(octet: octet))" }
-
-    /// Shared VM-side WG server conf: `~/.mpd-virt/conf/wireguard/server.conf`.
-    /// Pushed verbatim to every VM. Identical for every mpd-<NNN> on
-    /// this Mac because all VMs share the same WG identity (vm.private/
-    /// vm.public) and the same tunnel addressing (10.164.0.0/30).
-    static var wgServerConfFile: String { "\(wireGuardDir)/server.conf" }
 
     /// Valid octet range for managed VMs. Clamped to avoid the Parallels
     /// Shared DHCP pool (1–99) and the reserved broadcast/special
@@ -106,12 +90,12 @@ enum MpdVirt {
     // MARK: - Bootstrap runner (under Bootstrap/)
 
     enum Bootstrap {
-        enum RunInVM {}        // Bootstrap/RunInVM.swift — runs mpd/bootstrap/{10..60} via SSH
+        enum RunInVM {}        // Bootstrap/RunInVM.swift — runs mpd/bootstrap/{10..50} via SSH
     }
 
     // MARK: - Other namespaces
 
-    enum WireGuard {}
+    enum Net {}                // Net.swift               — container subnet / DNS addressing
     enum Registry {}
     enum CA {}                 // CA.swift                — name-constrained CA for *.mpd.test
     enum CloudInit {}          // CloudInit.swift         — cloud image cache + cidata ISO gen

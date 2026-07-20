@@ -1,9 +1,9 @@
 // mpd-virt — `diag <NNN>` verb.
 //
 // macOS-side diagnostic + completion of the post-setup steps that
-// `mpd-virt setup` deliberately doesn't run (routing, DNS, the WG.app
-// import, optional CA trust). Setup is for VM-side state; diag is for
-// the Mac-side wiring and end-to-end verification.
+// `mpd-virt setup` deliberately doesn't run (routing, DNS, optional
+// CA trust). Setup is for VM-side state; diag is for the Mac-side
+// wiring and end-to-end verification.
 //
 // Two-phase checklist:
 //
@@ -25,9 +25,9 @@
 //   8. End-to-end: curl https://mpd.test/ and read the VM id back
 //      out of the portal's page title — resolver + routing + portal
 //      + CA trust in a single real transaction.
-//   If 7 or 8 fails: walk the dev through routing OR WG.app tunnel
-//   import (either works — both expose the container subnet on the
-//   Mac). Wait for confirmation; re-test.
+//   If 7 or 8 fails: walk the dev through the static route that
+//   exposes the container subnet on the Mac. Wait for confirmation;
+//   re-test.
 //
 // `--non-interactive` stops after step 5. setup calls diag in
 // non-interactive mode; clone/create call it interactively (with
@@ -124,12 +124,12 @@ extension MpdVirt.Diag {
 
         section("/etc/resolver/mpd.test (scoped DNS for *.mpd.test)")
         if resolverFileLooksRight() {
-            ok("/etc/resolver/mpd.test → nameserver \(MpdVirt.WireGuard.containerDNS)")
+            ok("/etc/resolver/mpd.test → nameserver \(MpdVirt.Net.containerDNS)")
         } else {
-            warn("/etc/resolver/mpd.test missing or doesn't point at \(MpdVirt.WireGuard.containerDNS)")
+            warn("/etc/resolver/mpd.test missing or doesn't point at \(MpdVirt.Net.containerDNS)")
             print("    Paste to create it (macOS scopes this — only *.mpd.test queries go to the VM):")
             print("        sudo mkdir -p /etc/resolver")
-            print("        echo \"nameserver \(MpdVirt.WireGuard.containerDNS)\" | sudo tee /etc/resolver/mpd.test")
+            print("        echo \"nameserver \(MpdVirt.Net.containerDNS)\" | sudo tee /etc/resolver/mpd.test")
             promptReTest(nonInteractive: nonInteractive, label: "/etc/resolver/mpd.test") {
                 resolverFileLooksRight()
             }
@@ -137,30 +137,30 @@ extension MpdVirt.Diag {
 
         // Reachability is necessary but NOT sufficient. Every mpd VM
         // serves the same 10.163.0.0/24 with dnsmasq on the same
-        // 10.163.0.3, so once any one VM's route (or WG tunnel) is up,
+        // 10.163.0.3, so once any one VM's route is up,
         // the ping succeeds no matter which VM we're diagnosing — and
         // all *.mpd.test traffic silently lands on that other VM. So
         // after the ping we ask the dnsmasq we just reached who it
         // belongs to, via `dig` straight at 10.163.0.3. dig ignores
         // /etc/resolver, which is exactly what we want here: the answer
         // describes the ROUTE, not the resolver config (checked above).
-        section("Routing to \(MpdVirt.WireGuard.containerSubnet) (so the resolver can reach \(MpdVirt.WireGuard.containerDNS))")
-        if !pingOK(MpdVirt.WireGuard.containerDNS) {
-            warn("\(MpdVirt.WireGuard.containerDNS) NOT reachable — set up one of:")
-            printRoutingOptions(entry: entry)
-            promptReTest(nonInteractive: nonInteractive, label: "routing to \(MpdVirt.WireGuard.containerDNS)") {
-                pingOK(MpdVirt.WireGuard.containerDNS)
+        section("Routing to \(MpdVirt.Net.containerSubnet) (so the resolver can reach \(MpdVirt.Net.containerDNS))")
+        if !pingOK(MpdVirt.Net.containerDNS) {
+            warn("\(MpdVirt.Net.containerDNS) NOT reachable — add the static route:")
+            printRoutingFix(entry: entry)
+            promptReTest(nonInteractive: nonInteractive, label: "routing to \(MpdVirt.Net.containerDNS)") {
+                pingOK(MpdVirt.Net.containerDNS)
             }
         } else {
             switch dnsmasqIdentity() {
             case .some(let ip) where ip == entry.ip:
-                ok("\(MpdVirt.WireGuard.containerDNS) reachable — and it's \(entry.name)'s own dnsmasq (\(entry.ip))")
+                ok("\(MpdVirt.Net.containerDNS) reachable — and it's \(entry.name)'s own dnsmasq (\(entry.ip))")
             case .some(let ip):
-                warn("\(MpdVirt.WireGuard.containerDNS) answers, but it's a DIFFERENT VM's dnsmasq (\(ip)) — not \(entry.name) (\(entry.ip))")
-                print("    Every mpd VM serves the same \(MpdVirt.WireGuard.containerSubnet), so all *.mpd.test")
+                warn("\(MpdVirt.Net.containerDNS) answers, but it's a DIFFERENT VM's dnsmasq (\(ip)) — not \(entry.name) (\(entry.ip))")
+                print("    Every mpd VM serves the same \(MpdVirt.Net.containerSubnet), so all *.mpd.test")
                 print("    traffic is currently landing on \(ip). Repoint it at \(entry.name):")
                 print("")
-                printRepointFix(entry: entry)
+                printRoutingFix(entry: entry)
                 promptReTest(nonInteractive: nonInteractive, label: "routing to \(entry.name)") {
                     dnsmasqIdentity() == entry.ip
                 }
@@ -168,8 +168,8 @@ extension MpdVirt.Diag {
                 // Route works, but the VM publishes no identity record:
                 // older mpd, or a sandbox VM (mpd only emits
                 // host-record=vm.service.mpd.test when MPD_VM_IP is set).
-                warn("\(MpdVirt.WireGuard.containerDNS) reachable, but it doesn't answer for `vm.service.mpd.test` —")
-                print("    can't confirm the route lands on \(entry.name). Is another VM's route/tunnel active?")
+                warn("\(MpdVirt.Net.containerDNS) reachable, but it doesn't answer for `vm.service.mpd.test` —")
+                print("    can't confirm the route lands on \(entry.name). Is another VM's route active?")
             }
         }
 
@@ -189,7 +189,7 @@ extension MpdVirt.Diag {
         }
 
         section("End-to-end *.mpd.test")
-        if !resolverFileLooksRight() || !pingOK(MpdVirt.WireGuard.containerDNS) {
+        if !resolverFileLooksRight() || !pingOK(MpdVirt.Net.containerDNS) {
             print("    skipped — resolver file or routing still missing (see above)")
         } else {
             // The real transaction, not a proxy for it: fetch the portal
@@ -239,34 +239,15 @@ extension MpdVirt.Diag {
 
     // MARK: - Routing remediation
 
-    /// The two ways to put \(containerSubnet) on this Mac. Printed when
-    /// nothing routes there at all.
-    private static func printRoutingOptions(entry: MpdVirt.Registry.Entry) {
-        print("")
-        print("    A) Static route via this VM (simplest, no WireGuard):")
-        print("           sudo route -n delete \(MpdVirt.WireGuard.containerSubnet) 2>/dev/null; sudo route -n add \(MpdVirt.WireGuard.containerSubnet) \(entry.ip)")
-        print("")
-        print("    B) WireGuard tunnel (encrypted, also works off-LAN):")
-        let clientConf = MpdVirt.vmWireGuardConfFile(octet: entry.octet)
-        print("        - Open WireGuard.app (Mac App Store)")
-        print("        - \"+\" → \"Add Empty Tunnel…\", name it \(entry.name)")
-        print("        - Paste the contents of \(clientConf)")
-        print("          (Tip: `cat \(clientConf) | pbcopy`, then paste)")
-        print("        - Save, then toggle the tunnel ON from the menu bar.")
-    }
-
-    /// Printed when the subnet routes fine but to the WRONG VM. The fix
-    /// depends on WHO owns the route: a live WireGuard tunnel installs
-    /// its own route and wins over a static one, so telling the dev to
-    /// `route add` while another VM's tunnel is up would be useless
-    /// advice. `route -n get` tells us which case we're in.
-    private static func printRepointFix(entry: MpdVirt.Registry.Entry) {
-        if let iface = routePath()?.interface, iface.hasPrefix("utun") {
-            print("        Another VM's WireGuard tunnel is carrying the subnet (\(iface)).")
-            print("        Toggle that tunnel OFF in WireGuard.app, then switch on \(entry.name)'s")
-            print("        (or, if you'd rather use a static route, turn the tunnel off and run:)")
-        }
-        print("        sudo route -n delete \(MpdVirt.WireGuard.containerSubnet) 2>/dev/null; sudo route -n add \(MpdVirt.WireGuard.containerSubnet) \(entry.ip)")
+    /// The one way to put \(containerSubnet) on this Mac: a static route
+    /// via the VM's LAN IP. Printed when nothing routes there at all, and
+    /// again when the subnet routes to the WRONG VM (same fix — the
+    /// delete-then-add repoints an existing route).
+    ///
+    /// Note this doesn't survive a reboot; making it persistent is the
+    /// subject of docs/proposals/per-vm-addressing-and-wireguard-removal.md.
+    private static func printRoutingFix(entry: MpdVirt.Registry.Entry) {
+        print("        sudo route -n delete \(MpdVirt.Net.containerSubnet) 2>/dev/null; sudo route -n add \(MpdVirt.Net.containerSubnet) \(entry.ip)")
     }
 
     /// Interactive re-test prompt. After printing a fix, optionally
@@ -296,7 +277,7 @@ extension MpdVirt.Diag {
         guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else {
             return false
         }
-        let needle = "nameserver \(MpdVirt.WireGuard.containerDNS)"
+        let needle = "nameserver \(MpdVirt.Net.containerDNS)"
         return raw.split(whereSeparator: { $0 == "\n" }).contains { line in
             line.trimmingCharacters(in: .whitespaces) == needle
         }
@@ -357,7 +338,7 @@ extension MpdVirt.Diag {
         let r = MpdVirt.Host.Ssh.runWithTimeout(
             argv: [
                 "/usr/bin/dig", "+short", "+time=1", "+tries=1",
-                "@\(MpdVirt.WireGuard.containerDNS)", "vm.service.mpd.test", "A",
+                "@\(MpdVirt.Net.containerDNS)", "vm.service.mpd.test", "A",
             ],
             timeoutSeconds: probeTimeoutSec
         )
@@ -397,30 +378,6 @@ extension MpdVirt.Diag {
         guard title.hasPrefix("mpd-") else { return nil }
         let id = String(title.dropFirst("mpd-".count))
         return id.isEmpty ? nil : id
-    }
-
-    /// Which interface/gateway macOS currently uses for the container
-    /// subnet, per `route -n get`. Only used to word the remediation:
-    /// a `utun*` interface means WireGuard owns the route.
-    private static func routePath() -> (gateway: String?, interface: String?)? {
-        let r = MpdVirt.Host.Ssh.runWithTimeout(
-            argv: ["/sbin/route", "-n", "get", MpdVirt.WireGuard.containerSubnet],
-            timeoutSeconds: probeTimeoutSec
-        )
-        if r.timedOut || r.exitCode != 0 { return nil }
-        var gateway: String?
-        var interface: String?
-        for line in r.stdout.split(whereSeparator: { $0 == "\n" }) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if gateway == nil, trimmed.hasPrefix("gateway:") {
-                gateway = String(trimmed.dropFirst("gateway:".count))
-                    .trimmingCharacters(in: .whitespaces)
-            } else if interface == nil, trimmed.hasPrefix("interface:") {
-                interface = String(trimmed.dropFirst("interface:".count))
-                    .trimmingCharacters(in: .whitespaces)
-            }
-        }
-        return (gateway, interface)
     }
 
     // MARK: - platform.env parser

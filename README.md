@@ -26,14 +26,14 @@ builds. Hypervisor variety lives *inside* each repo as plugins.
 
 ## Verbs
 
-The 3-digit octet `NNN` is the canonical key for every VM (name `mpd-<NNN>`, static IP `10.211.55.<NNN>`, registry dir `~/.mpd-virt/<NNN>/`, WG.app tunnel `mpd-<NNN>`). Multiple VMs can coexist; WireGuard.app's active tunnel decides which `*.mpd.test` traffic flows to.
+The 3-digit octet `NNN` is the canonical key for every VM (name `mpd-<NNN>`, static IP `10.211.55.<NNN>`, registry dir `~/.mpd-virt/<NNN>/`). Multiple VMs can coexist, but they all serve the same container subnet `10.163.0.0/24`, so the Mac's static route to it decides which VM `*.mpd.test` traffic flows to.
 
 | Verb | Args | Role |
 |---|---|---|
 | `create <NNN>` | `--backend= --username= --vm-disk= --vm-ram= --yes` | User-friendly. Materialize a new VM (UTM cloud-init → eventually Parallels too) → `setup` → interactive `diag`. |
 | `clone <NNN>` | `--backend= --template=mpd-template-<suffix> --username= --vm-disk= --vm-ram= --yes` | User-friendly. Duplicate an existing VM (Parallels `prlctl clone` → eventually UTM too) → `setup` → interactive `diag`. |
 | `setup <NNN>` | `--ip= --backend= --username= --debug` | **VM side only.** Set up host↔VM SSH, run the in-VM bootstrap pipeline, install `mpd`. Non-interactive — for advanced/scripted use. Finishes with `diag --non-interactive`. |
-| `diag <NNN>` | `--non-interactive` | **macOS side.** Mandatory phase: registry → backend → ping → platform.env compare → SSH alias. Optional phase: DNS / routing / WG check + CA trust suggestion (always reported; interactive mode also pauses to apply fixes and re-test). |
+| `diag <NNN>` | `--non-interactive` | **macOS side.** Mandatory phase: registry → backend → ping → platform.env compare → SSH alias. Optional phase: DNS / routing check + CA trust suggestion (always reported; interactive mode also pauses to apply fixes and re-test). |
 | `update <NNN>` | — | Pull latest mpd source on the VM, rebuild the `mpd` binary, re-run `mpd --setup`. Just runs `bash /opt/mpd/bootstrap/70-update.sh` over SSH — the update flow itself is mpd's contract, not mpd-virt's. |
 | `delete <NNN>` | `--keep-vm --yes` | Remove VM and registry entry. `--keep-vm` keeps the hypervisor VM (re-add with `setup`). |
 | `start <NNN>` | — | Hypervisor start. General: hard error. |
@@ -105,12 +105,12 @@ mpd-virt clone 150 --template=mpd-template-trixie --username=USER --backend=para
 ### Setup vs diag — division of labor
 
 - **`setup`** owns the VM. It establishes SSH, runs the bootstrap chain
-  on the VM (10–60), pushes the CA and WG conf to `/var/lib/mpd/conf/`,
+  on the VM (10–50), pushes the CA to `/var/lib/mpd/conf/`,
   runs `mpd --setup` inside the VM, and registers the VM in
   `~/.mpd-virt/<NNN>/`. It is non-interactive end-to-end — every input
   comes from the CLI or the registry.
 - **`diag`** owns the Mac. It verifies the VM is healthy (mandatory
-  phase), then reports DNS / routing / WG / CA trust status (optional
+  phase), then reports DNS / routing / CA trust status (optional
   phase, always printed). With `--non-interactive` (used by `setup`)
   the optional phase only *prints* the suggested fix commands — the
   workflow doesn't stop. Interactive mode (used by `create` / `clone`)
@@ -146,9 +146,6 @@ MPD_VM_RAM=8G                    # diagnostic
 ~/.mpd-virt/                       ← everything mpd-virt owns
 ├── conf/                          ← identity (survives every `delete`)
 │   ├── caroot/{rootCA.pem,rootCA-key.pem}
-│   ├── wireguard/
-│   │   ├── mac.{private,public}
-│   │   └── <NNN>/{private,public,server.conf,client.conf}
 │   ├── service/
 │   └── backend.env                ← MPD_VIRT_DEFAULT_BACKEND=<name>
 └── <NNN>/env                      ← per-VM registry entry (see Registry above)
@@ -161,7 +158,11 @@ flow, not here.
 `~/.mpd/` is **not** created on the host — that path is exclusively the
 in-VM runtime state directory inside each mpd VM.
 
-Full design rationale: see [`docs/proposals/macos-host-state-and-wireguard.md`](docs/proposals/macos-host-state-and-wireguard.md).
+Full design rationale: see
+[`docs/proposals/macos-host-state-and-wireguard.md`](docs/proposals/macos-host-state-and-wireguard.md)
+(its WireGuard half is superseded — the transport is now a plain static
+route; see
+[`docs/proposals/per-vm-addressing-and-wireguard-removal.md`](docs/proposals/per-vm-addressing-and-wireguard-removal.md)).
 
 ## Build
 

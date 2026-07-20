@@ -9,11 +9,8 @@
 //   1. SSH key auth check. ssh-keygen hint if no key; ssh-copy-id hint
 //      if VM doesn't accept it yet.
 //   2. CA load-or-generate (host-side; needed to push to VM).
-//   3. WireGuard keypair + server.conf + client.conf rendering. The
-//      client.conf at ~/.mpd-virt/<NNN>/wireguard.conf is just a file
-//      on disk — diag walks the dev through pasting it into WG.app.
-//   4. VM-side bootstrap: scp CA cert + WG server.conf, run bootstrap
-//      10..60, run `mpd --setup`. Registry entry is persisted from
+//   3. VM-side bootstrap: scp CA cert + key, run bootstrap
+//      10..50, run `mpd --setup`. Registry entry is persisted from
 //      inside the bootstrap's onCanonicalIPReady callback, the moment
 //      the VM is at the canonical IP — before that point the VM
 //      isn't really "ours".
@@ -105,16 +102,7 @@ extension MpdVirt.Setup {
         try MpdVirt.CA.loadOrGenerate()
         info("CA: \(MpdVirt.CA.certPath)")
 
-        // 3. WireGuard keypairs + conf files. Both files are
-        // regeneratable from the persisted keys, so this is idempotent.
-        _ = try MpdVirt.WireGuard.macKeypair()
-        let (serverConf, clientConf) = try MpdVirt.WireGuard.Confs.renderAndSave(
-            octet: octet, vmEndpoint: backend.canonicalIP(octet: octet)
-        )
-        info("WG: server.conf at \(serverConf)")
-        info("WG: client.conf at \(clientConf)")
-
-        // 4. VM-side bootstrap. Skipped only when the registry already
+        // 3. VM-side bootstrap. Skipped only when the registry already
         // exists (the VM was previously claimed) AND it's reachable at
         // the canonical IP (it's still up). Both conditions mean
         // bootstrap has already landed once; re-running it is safe but
@@ -138,7 +126,6 @@ extension MpdVirt.Setup {
                 initialIP: ip,
                 canonicalIP: canonicalIP,
                 username: username,
-                wgServerConfPath: serverConf,
                 caCertPath: MpdVirt.CA.certPath,
                 caKeyPath: MpdVirt.CA.keyPath,
                 onCanonicalIPReady: {
@@ -163,7 +150,7 @@ extension MpdVirt.Setup {
             )
         }
 
-        // 6. Done. Setup is VM-side only — the SSH config block,
+        // 4. Done. Setup is VM-side only — the SSH config block,
         // CA trust, DNS resolver and other macOS-side artifacts are
         // diag's job. SetupCmd in main.swift always follows up with
         // `diag --non-interactive`; create/clone follow up with

@@ -3,7 +3,7 @@
 // Drives the mpd/bootstrap/{10..60}-*.sh pipeline against a Debian
 // Trixie VM. The bootstrap scripts themselves live in the sibling
 // `mpd` repo and are idempotent; this file just sequences them via
-// SSH, pushes the host-generated WG/CA material into the VM at the
+// SSH, pushes the host-generated CA material into the VM at the
 // right moments, and handles the SSH-drop-and-reconnect dance that
 // `30-networking.sh` triggers when it pins the static IP.
 //
@@ -12,7 +12,6 @@
 //   on initial-ip:
 //     10-passwordless-sudo.sh   — wget'd; interactive (-t)
 //     20-git-clone.sh           — wget'd; clones to /opt/mpd
-//     push server.conf          → /var/lib/mpd/conf/wireguard/mpd0.conf
 //     push CA cert              → /var/lib/mpd/conf/caroot/rootCA.pem
 //     30-networking.sh <NNN>    — local; SSH session drops here
 //
@@ -20,7 +19,6 @@
 //     waitUntilReachable
 //     40-install-software.sh    — local
 //     50-build.sh               — local
-//     60-wireguard.sh           — local; brings up wg-quick@mpd0
 //     mpd --setup               — initializes the in-VM mpd platform
 //
 // Output of each step is streamed live to the user's terminal.
@@ -65,15 +63,12 @@ extension MpdVirt.Bootstrap.RunInVM {
     ///     `Backend.canonicalIP(octet:)`.
     ///   - username: dev user inside the VM (must already have SSH key
     ///     trust on the host's id_ed25519 / agent).
-    ///   - wgServerConfPath: local path to the rendered server.conf
-    ///     (from MpdVirt.WireGuard.Confs.renderAndSave).
     ///   - caCertPath: local path to the CA public cert.
     static func run(
         octet: Int,
         initialIP: String,
         canonicalIP: String,
         username: String,
-        wgServerConfPath: String,
         caCertPath: String,
         caKeyPath: String,
         /// Fires the instant the VM is confirmed reachable at the
@@ -120,13 +115,6 @@ extension MpdVirt.Bootstrap.RunInVM {
 
         // Push host-generated material into the VM. /var/lib/mpd is
         // dev-user-owned after step 20.
-        try pushFile(
-            initialTarget,
-            title: "push WG server.conf",
-            localPath: wgServerConfPath,
-            remotePath: "/var/lib/mpd/conf/wireguard/mpd0.conf",
-            mode: 0o600
-        )
         try pushFile(
             initialTarget,
             title: "push CA cert",
@@ -187,12 +175,6 @@ extension MpdVirt.Bootstrap.RunInVM {
             postRenameTarget,
             title: "50-build.sh",
             command: "bash /opt/mpd/bootstrap/50-build.sh"
-        )
-
-        try runRemoteScript(
-            postRenameTarget,
-            title: "60-wireguard.sh",
-            command: "bash /opt/mpd/bootstrap/60-wireguard.sh"
         )
 
         try runRemoteScript(

@@ -236,13 +236,13 @@ struct ListCmd: ParsableCommand {
 struct DiagCmd: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "diag",
-        abstract: "Per-VM diagnostic: registry → backend → ping → platform.env compare → SSH alias. Interactive by default; --non-interactive stops before the optional macOS DNS / routing / WG check."
+        abstract: "Per-VM diagnostic: registry → backend → ping → platform.env compare → SSH alias. Interactive by default; --non-interactive stops before the optional macOS DNS / routing check."
     )
 
     @Argument(help: "Octet (100–254).")
     var octet: Int
 
-    @Flag(name: .customLong("non-interactive"), help: "Run only the mandatory checks (registry → backend → ping → platform.env → SSH). Skip the macOS-side DNS / routing / WG walkthrough.")
+    @Flag(name: .customLong("non-interactive"), help: "Run only the mandatory checks (registry → backend → ping → platform.env → SSH). Skip the macOS-side DNS / routing walkthrough.")
     var nonInteractive: Bool = false
 
     func run() throws { try MpdVirt.Diag.run(octet: octet, nonInteractive: nonInteractive) }
@@ -272,7 +272,7 @@ struct UninstallCmd: ParsableCommand {
         abstract: "Remove the persistent host-side trust material (CA in System Keychain, ~/.mpd-virt/conf/, any legacy /etc/resolver/mpd.test)."
     )
 
-    @Flag(name: .customLong("force"), help: "Proceed even when VMs are still registered (leaves WG.app tunnels + SSH config blocks dangling).")
+    @Flag(name: .customLong("force"), help: "Proceed even when VMs are still registered (leaves SSH config blocks dangling).")
     var force: Bool = false
 
     @Flag(name: .customLong("yes"), help: "Skip confirmation prompts.")

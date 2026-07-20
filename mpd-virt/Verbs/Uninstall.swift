@@ -3,20 +3,20 @@
 // Per-machine cleanup. The complement of `delete <NNN>` (per-VM):
 //
 //   delete   <NNN>   — removes one VM + its registry entry; preserves
-//                       conf/ (CA + shared WG identity persist).
+//                       conf/ (the CA persists).
 //   uninstall        — removes everything per-machine: CA from System
 //                       Keychain, /etc/resolver/mpd.test, any static
 //                       route to the container subnet, ~/.mpd-virt/conf/
-//                       (CA files, WG identity, backend.env), and
-//                       (with --force) any leftover per-VM dirs.
+//                       (CA files, backend.env), and (with --force) any
+//                       leftover per-VM dirs.
 //
 // All sudo-requiring steps are batched into ONE sudo recipe so the
 // user types their password / does Touch ID at most once for the
 // whole uninstall.
 //
 // Refuses to run while VMs are still registered unless `--force` is
-// passed; otherwise the dev silently leaves per-VM WG.app tunnels +
-// SSH-config blocks dangling against a CA that's about to disappear.
+// passed; otherwise the dev silently leaves per-VM SSH-config blocks
+// dangling against a CA that's about to disappear.
 
 import Foundation
 
@@ -68,8 +68,8 @@ extension MpdVirt.Uninstall {
             }
             if hasContainerSubnetRoute() {
                 s.append(MpdVirt.Host.SudoRecipe.Step(
-                    title: "Remove static route to \(MpdVirt.WireGuard.containerSubnet)",
-                    argv: ["/sbin/route", "-n", "delete", MpdVirt.WireGuard.containerSubnet]
+                    title: "Remove static route to \(MpdVirt.Net.containerSubnet)",
+                    argv: ["/sbin/route", "-n", "delete", MpdVirt.Net.containerSubnet]
                 ))
             }
             return s
@@ -88,9 +88,9 @@ extension MpdVirt.Uninstall {
             MpdVirt.Ui.info("\(resolverFile) not present")
         }
         if hasContainerSubnetRoute() {
-            ok("static route to \(MpdVirt.WireGuard.containerSubnet) present")
+            ok("static route to \(MpdVirt.Net.containerSubnet) present")
         } else {
-            MpdVirt.Ui.info("no static route to \(MpdVirt.WireGuard.containerSubnet)")
+            MpdVirt.Ui.info("no static route to \(MpdVirt.Net.containerSubnet)")
         }
         if initialSteps.isEmpty {
             MpdVirt.Ui.info("nothing root-owned to clean up")
@@ -136,7 +136,6 @@ extension MpdVirt.Uninstall {
                 }
                 try? MpdVirt.Host.SSHConfig.strip(octet: octet)
             }
-            warn("WG.app still has tunnels for: \(known.map { MpdVirt.vmName(octet: $0) }.joined(separator: ", ")) — remove them by hand.")
         }
 
         // 6. Drop the top-level dir if it's empty now.
@@ -158,7 +157,7 @@ extension MpdVirt.Uninstall {
     /// (the default route doesn't satisfy a `/24` lookup).
     private static func hasContainerSubnetRoute() -> Bool {
         let r = MpdVirt.Host.Ssh.runWithTimeout(
-            argv: ["/sbin/route", "-n", "get", MpdVirt.WireGuard.containerSubnet],
+            argv: ["/sbin/route", "-n", "get", MpdVirt.Net.containerSubnet],
             timeoutSeconds: 2.0
         )
         if r.timedOut || r.exitCode != 0 { return false }

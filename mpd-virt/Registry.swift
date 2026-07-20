@@ -144,9 +144,9 @@ extension MpdVirt.Registry {
         )
     }
 
-    /// Remove `<NNN>/` entirely. Does **not** touch
-    /// `~/.mpd-virt/conf/wireguard/<NNN>/` — that survives delete so
-    /// re-setup at the same octet reuses the same WG keypair.
+    /// Remove `<NNN>/` entirely. Does **not** touch `~/.mpd-virt/conf/`
+    /// — the CA and service certs survive delete so re-setup at the same
+    /// octet reuses the same trust material.
     static func remove(octet: Int) throws {
         let dir = MpdVirt.vmDir(octet: octet)
         guard FileManager.default.fileExists(atPath: dir) else { return }
