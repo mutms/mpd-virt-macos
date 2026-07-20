@@ -26,7 +26,7 @@ builds. Hypervisor variety lives *inside* each repo as plugins.
 
 ## Verbs
 
-The 3-digit octet `NNN` is the canonical key for every VM (name `mpd-<NNN>`, static IP `10.211.55.<NNN>`, registry dir `~/.mpd-virt/<NNN>/`). Multiple VMs can coexist, but they all serve the same container subnet `10.163.0.0/24`, so the Mac's static route to it decides which VM `*.mpd.test` traffic flows to.
+The 3-digit octet `NNN` is the canonical key for every VM — and it keys the addressing too: name `mpd-<NNN>`, static IP `10.211.55.<NNN>`, registry dir `~/.mpd-virt/<NNN>/`, container subnet `10.163.<NNN>.0/24`, DNS zone `<NNN>.mpd.test`. Because each VM owns a distinct subnet and a distinct zone, **several VMs are reachable from this Mac at once**: one static route and one `/etc/resolver/<NNN>.mpd.test` per VM, none of which conflict (macOS `resolver(5)` matches longest suffix). Note the bare `mpd.test` apex does not resolve — with two VMs up it could only mean one of them.
 
 | Verb | Args | Role |
 |---|---|---|
@@ -39,7 +39,7 @@ The 3-digit octet `NNN` is the canonical key for every VM (name `mpd-<NNN>`, sta
 | `start <NNN>` | — | Hypervisor start. General: hard error. |
 | `stop <NNN>` | `--kill` | Hypervisor suspend (or hard-stop with `--kill`). General: hard error. |
 | `list` | `--json` | List registered VMs. Default verb. |
-| `uninstall` | `--force --yes` | Per-machine cleanup: CA from System Keychain, `~/.mpd-virt/conf/`, legacy `/etc/resolver/mpd.test`. |
+| `uninstall` | `--force --yes` | Per-machine cleanup: CA from System Keychain, `~/.mpd-virt/conf/`, every `/etc/resolver/<NNN>.mpd.test` and every `10.163.x.0/24` route (plus the pre-per-VM-zone leftovers). |
 | `backend list` | — | Compiled-in backends + capabilities + default. |
 | `backend set-default` | `<name>` | Persist default backend to `~/.mpd-virt/conf/backend.env`. |
 
@@ -62,7 +62,27 @@ Build the template:
    terminal if the GUI path doesn't run).
 4. **Name the VM** `mpd-template-<suffix>` (e.g. `mpd-template-trixie`).
    The bootstrap's hostname gate also accepts `mpd-sandbox-<suffix>`.
-5. **Convert to Template** in Parallels: File → Convert to Template
+5. **Disable in-guest automatic updates.** The template is the update
+   mechanism — it gets rebuilt for each Parallels release anyway (new
+   Parallels Tools), and every clone runs `apt-get` during bootstrap.
+   A guest that also updates itself adds nondeterminism without adding
+   currency:
+
+   ```
+   sudo systemctl mask packagekit packagekit-offline-update
+   sudo systemctl disable --now unattended-upgrades
+   ```
+
+   `packagekitd` is started by an auto-login GNOME session and takes
+   the dpkg lock to check for updates — right when a freshly cloned VM
+   is being bootstrapped. `unattended-upgrades` does the same on a
+   timer and holds the lock far longer, since it actually installs.
+   Bootstrap waits for the lock rather than failing
+   (`DPkg::Lock::Timeout=300`, tunable via `MPD_APT_LOCK_TIMEOUT`), so
+   neither breaks a clone — they just stall it, and can pull in package
+   versions the template was never tested with. Nothing in mpd uses
+   PackageKit.
+6. **Convert to Template** in Parallels: File → Convert to Template
    (optional — full clones from a regular VM work too).
 
 The bootstrap pipeline (`mpd-virt setup` runs it automatically after

@@ -10,7 +10,7 @@ in-VM `mpd` binary's proposals (if any) live in
 
 ## Index
 
-- [`per-vm-addressing-and-wireguard-removal.md`](per-vm-addressing-and-wireguard-removal.md) —
+- [`per-vm-addressing-and-wireguard-removal.md`](per-vm-addressing-and-wireguard-removal.md) — **implemented 2026-07-20; kept as the design record.**
   Per-VM DNS zones (`222.mpd.test`) and container subnets
   (`10.163.222.0/24`), with reachability via a persistent static route
   instead of WireGuard. Makes concurrent VMs possible and frees the
