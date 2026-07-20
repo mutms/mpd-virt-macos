@@ -130,7 +130,7 @@ genuinely Parallels-specific.
   on top of the same core. The "one mechanism, two use cases"
   framing in that proposal becomes "one mechanism, three product
   surfaces" once `create` is added.
-- [`macos-host-state-and-wireguard.md`](macos-host-state-and-wireguard.md)
+- [`macos-host-state.md`](macos-host-state.md)
   — `adopt()` is the writer of `~/.mpd-virt/<octet>/env`,
   `current.env`, and the host-side WG config that proposal defines.
 

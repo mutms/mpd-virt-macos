@@ -129,7 +129,7 @@ the Mac side uses for SSH + WG endpoint configuration.
   cloud-init seed-ISO generation (already in `mpd-virt-linux` and
   `mpd-virt-windows`); the UTM backend reuses it.
 - **VM identity:** still octet-keyed (matches the
-  `macos-host-state-and-wireguard.md` proposal). The state files
+  `macos-host-state.md` proposal). The state files
   under `~/.mpd-virt/<octet>/` are backend-agnostic.
 
 ## What does *not* change

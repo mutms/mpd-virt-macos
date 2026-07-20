@@ -7,7 +7,7 @@ libvirt-KVM / Hyper-V) selected at build time via per-platform Swift
 target conditioning.
 
 The companion proposal
-[`macos-host-state-and-wireguard.md`](macos-host-state-and-wireguard.md)
+[`macos-host-state.md`](macos-host-state.md)
 covers the architectural choices `mpd-virt` builds on (three-directory
 state model, WireGuard-based networking, persistent identity in
 `~/Developer/mpd/conf/`). Read that first; this document specifies the

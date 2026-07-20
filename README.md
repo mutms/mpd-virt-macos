@@ -179,10 +179,7 @@ flow, not here.
 in-VM runtime state directory inside each mpd VM.
 
 Full design rationale: see
-[`docs/proposals/macos-host-state-and-wireguard.md`](docs/proposals/macos-host-state-and-wireguard.md)
-(its WireGuard half is superseded — the transport is now a plain static
-route; see
-[`docs/proposals/per-vm-addressing-and-wireguard-removal.md`](docs/proposals/per-vm-addressing-and-wireguard-removal.md)).
+[`docs/proposals/macos-host-state.md`](docs/proposals/macos-host-state.md).
 
 ## Build
 

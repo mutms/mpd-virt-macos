@@ -8,21 +8,24 @@ These describe the `mpd-virt-macos` binary's architecture; the
 in-VM `mpd` binary's proposals (if any) live in
 [the main mpd repo](https://github.com/mutms/mpd).
 
+> **Note.** Proposals here are design records, not current
+> documentation. Several predate the removal of WireGuard (2026-07-20)
+> and still describe a tunnel; mpd has no tunnel — reachability is a
+> static route per VM. Treat networking details in older proposals as
+> historical.
+
 ## Index
 
-- [`per-vm-addressing-and-wireguard-removal.md`](per-vm-addressing-and-wireguard-removal.md) — **implemented 2026-07-20; kept as the design record.**
-  Per-VM DNS zones (`222.mpd.test`) and container subnets
-  (`10.163.222.0/24`), with reachability via a persistent static route
-  instead of WireGuard. Makes concurrent VMs possible and frees the
-  Mac's single tunnel slot for other VPNs. Cross-repo: ships in
-  lockstep with the matching change in the mpd repo.
-- [`macos-host-state-and-wireguard.md`](macos-host-state-and-wireguard.md) —
-  State model + WireGuard architecture for the macOS host. Defines
-  `~/.mpd-virt/conf/` for persistent identity, `~/.mpd-virt/<octet>/`
-  for per-VM bookkeeping, and a WireGuard-based networking model that
-  eliminates daily sudo. **The WireGuard half is superseded** by
-  `per-vm-addressing-and-wireguard-removal.md`; the state model
-  stands.
+- [`macos-host-state.md`](macos-host-state.md) — State model for the
+  macOS host: `~/.mpd-virt/conf/` for persistent identity,
+  `~/.mpd-virt/<octet>/` for per-VM bookkeeping, plus the host-side
+  threat model. Implemented; kept for the rationale.
+
+Per-VM addressing (zones like `222.mpd.test`, subnets like
+`10.163.222.0/24`, reachability via a static route rather than a
+tunnel) shipped on 2026-07-20 and its proposal has been removed — the
+model is documented where it is implemented: this repo's `README.md`
+and `MpdVirt.Net`, and the mpd repo's `docs/NETWORKING.md`.
 - [`mpd-virt.md`](mpd-virt.md) — `mpd-virt`'s verb surface, sudo-recipe
   UX, VM identity model (octet as canonical key), and the
   Parallels-Desktop-Pro backend specifics.
