@@ -62,26 +62,17 @@ Build the template:
    terminal if the GUI path doesn't run).
 4. **Name the VM** `mpd-template-<suffix>` (e.g. `mpd-template-trixie`).
    The bootstrap's hostname gate also accepts `mpd-sandbox-<suffix>`.
-5. **Disable in-guest automatic updates.** The template is the update
-   mechanism — it gets rebuilt for each Parallels release anyway (new
-   Parallels Tools), and every clone runs `apt-get` during bootstrap.
-   A guest that also updates itself adds nondeterminism without adding
-   currency:
+5. **Disable in-guest automatic updates:**
 
    ```
    sudo systemctl mask packagekit packagekit-offline-update
    sudo systemctl disable --now unattended-upgrades
    ```
 
-   `packagekitd` is started by an auto-login GNOME session and takes
-   the dpkg lock to check for updates — right when a freshly cloned VM
-   is being bootstrapped. `unattended-upgrades` does the same on a
-   timer and holds the lock far longer, since it actually installs.
-   Bootstrap waits for the lock rather than failing
-   (`DPkg::Lock::Timeout=300`, tunable via `MPD_APT_LOCK_TIMEOUT`), so
-   neither breaks a clone — they just stall it, and can pull in package
-   versions the template was never tested with. Nothing in mpd uses
-   PackageKit.
+   Why, and what mpd does about it when you skip it, is documented once
+   in mpd itself — [`setup/README.md` §"Prepare the guest"](https://github.com/mutms/mpd/blob/main/setup/README.md#prepare-the-guest-disable-in-guest-automatic-updates).
+   It applies to every guest you keep and re-clone, not just Parallels
+   templates.
 6. **Convert to Template** in Parallels: File → Convert to Template
    (optional — full clones from a regular VM work too).
 
