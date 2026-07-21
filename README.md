@@ -34,7 +34,7 @@ The 3-digit octet `NNN` is the canonical key for every VM — and it keys the ad
 | `clone <NNN>` | `--backend= --template=mpd-template-<suffix> --username= --vm-disk= --vm-ram= --yes` | User-friendly. Duplicate an existing VM (Parallels `prlctl clone` → eventually UTM too) → `setup` → interactive `diag`. |
 | `setup <NNN>` | `--ip= --backend= --username= --debug` | **VM side only.** Set up host↔VM SSH, run the in-VM bootstrap pipeline, install `mpd`. Non-interactive — for advanced/scripted use. Finishes with `diag --non-interactive`. |
 | `diag <NNN>` | `--non-interactive` | **macOS side.** Mandatory phase: registry → backend → ping → platform.env compare → SSH alias. Optional phase: DNS / routing check + CA trust suggestion (always reported; interactive mode also pauses to apply fixes and re-test). |
-| `update <NNN>` | — | Pull latest mpd source on the VM, rebuild the `mpd` binary, re-run `mpd --setup`. Just runs `bash /opt/mpd/bootstrap/70-update.sh` over SSH — the update flow itself is mpd's contract, not mpd-virt's. |
+| `update <NNN>` | — | Pull latest mpd source on the VM, rebuild the `mpd` binary, re-run `mpd --vm-setup`. Just runs `bash /opt/mpd/bootstrap/99-update.sh` over SSH — the update flow itself is mpd's contract, not mpd-virt's. |
 | `delete <NNN>` | `--keep-vm --yes` | Remove VM and registry entry. `--keep-vm` keeps the hypervisor VM (re-add with `setup`). |
 | `start <NNN>` | — | Hypervisor start. General: hard error. |
 | `stop <NNN>` | `--kill` | Hypervisor suspend (or hard-stop with `--kill`). General: hard error. |
@@ -88,7 +88,7 @@ Build the template:
 The bootstrap pipeline (`mpd-virt setup` runs it automatically after
 `clone`) handles the rest — converting NetworkManager → systemd-networkd,
 pinning the static IP, installing the runtime stack, building `mpd`,
-and running `mpd --setup`. No "sandbox take-over" step is needed.
+and running `mpd --vm-setup`. No "sandbox take-over" step is needed.
 
 Then run two mpd-virt-specific commands **from your Mac terminal**,
 against the template VM, before the first clone:
@@ -126,7 +126,7 @@ mpd-virt clone 150 --template=mpd-template-trixie --username=USER --backend=para
 
 - **`setup`** owns the VM. It establishes SSH, runs the bootstrap chain
   on the VM (10–50), pushes the CA to `/var/lib/mpd/conf/`,
-  runs `mpd --setup` inside the VM, and registers the VM in
+  runs `mpd --vm-setup` inside the VM, and registers the VM in
   `~/.mpd-virt/<NNN>/`. It is non-interactive end-to-end — every input
   comes from the CLI or the registry.
 - **`diag`** owns the Mac. It verifies the VM is healthy (mandatory

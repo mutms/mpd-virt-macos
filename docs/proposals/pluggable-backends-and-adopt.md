@@ -31,7 +31,7 @@ func adopt(ip: String, octet: Int, username: String) throws { … }
 
 `provision()` is the only per-backend code. Everything that comes
 after — host route, DNS resolver, CA trust, WireGuard keypair + push,
-in-VM `mpd --setup`, `~/.ssh/config` block, Desktop shortcut — lives
+in-VM `mpd --vm-setup`, `~/.ssh/config` block, Desktop shortcut — lives
 in `adopt()` and is identical across backends.
 
 ## What `adopt(ip, octet, username)` does
@@ -44,7 +44,7 @@ existence:
    keychain (sudo-recipe UX from [`mpd-virt.md`](mpd-virt.md)).
 2. **SSH bootstrap into the VM** — ensure dev pubkey authorized,
    rebuild `bin/mpd` if needed, upload host CA into
-   `/var/lib/mpd/conf/caroot/`, run `mpd --setup`.
+   `/var/lib/mpd/conf/caroot/`, run `mpd --vm-setup`.
 3. **WireGuard** — generate keypair on the Mac, push
    `mpd0.conf` into `/var/lib/mpd/conf/wireguard/`, kick
    `wg-quick@mpd0` on the VM, install matching tunnel on the Mac via

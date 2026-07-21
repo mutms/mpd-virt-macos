@@ -10,7 +10,7 @@
 //      if VM doesn't accept it yet.
 //   2. CA load-or-generate (host-side; needed to push to VM).
 //   3. VM-side bootstrap: scp CA cert + key, run bootstrap
-//      10..50, run `mpd --setup`. Registry entry is persisted from
+//      10..50, run `mpd --vm-setup`. Registry entry is persisted from
 //      inside the bootstrap's onCanonicalIPReady callback, the moment
 //      the VM is at the canonical IP — before that point the VM
 //      isn't really "ours".

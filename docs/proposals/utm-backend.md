@@ -166,7 +166,7 @@ the Mac side uses for SSH + WG endpoint configuration.
 ## Acceptance
 
 - `mpd-virt-utm create 158` end-to-end creates a Debian Trixie VM,
-  runs the bootstrap chain, ends with `mpd --setup` succeeding
+  runs the bootstrap chain, ends with `mpd --vm-setup` succeeding
   inside.
 - WireGuard tunnel from Mac → VM works; `https://mpd.test/`
   resolves from Mac browser.

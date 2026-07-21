@@ -38,7 +38,7 @@ and `MpdVirt.Net`, and the mpd repo's `docs/NETWORKING.md`.
   One mechanism, two use cases: adopting an existing `mpd-sandbox` VM
   as a managed `mpd-<NNN>` VM, and rotating the local CA before its
   ~1-year expiry. Both share a `mpd-virt refresh-trust <vm>` primitive
-  plus a new in-VM `mpd --refresh-trust` verb. CA expiry is a fixed
+  plus a new in-VM `mpd --vm-refresh-trust` verb. CA expiry is a fixed
   deadline; schedule before the first user hits it.
 - [`pluggable-backends-and-adopt.md`](pluggable-backends-and-adopt.md) —
   **read first if you're starting `mpd-virt` implementation.** The

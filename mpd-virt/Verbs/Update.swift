@@ -1,13 +1,13 @@
 // mpd-virt — `update <NNN>` verb.
 //
 // Refresh a running mpd VM to current main. The actual update logic
-// lives in mpd at `/opt/mpd/bootstrap/70-update.sh` — this verb is
+// lives in mpd at `/opt/mpd/bootstrap/99-update.sh` — this verb is
 // pure orchestration: ssh in, run the script, follow with a
 // non-interactive diag pass.
 //
 // Why a separate verb (not folded into setup): setup is "adopt + run
 // the initial bootstrap" — runs once per VM. Update is the recurring
-// "pull the latest source, rebuild, re-run mpd --setup" loop. Keeping
+// "pull the latest source, rebuild, re-run mpd --vm-setup" loop. Keeping
 // them distinct means setup re-runs stay fast (just idempotent host
 // state checks), and update is the explicit knob for the slow git/
 // build cycle.
@@ -15,7 +15,7 @@
 // Why the logic lives in mpd's bootstrap dir: mpd-virt doesn't need
 // a release when the update flow evolves (new container image rebuilds,
 // new schema migrations, additional apt packages). The contract is:
-// "run /opt/mpd/bootstrap/70-update.sh on the VM; you'll be current."
+// "run /opt/mpd/bootstrap/99-update.sh on the VM; you'll be current."
 
 import Foundation
 
@@ -34,11 +34,11 @@ extension MpdVirt.Update {
         // the dev should see progress.
         let code = try MpdVirt.Host.Ssh.stream(
             target,
-            "bash /opt/mpd/bootstrap/70-update.sh"
+            "bash /opt/mpd/bootstrap/99-update.sh"
         )
         guard code == 0 else {
             throw MpdVirt.BackendError.other(
-                "update failed (exit \(code)). SSH in and re-run /opt/mpd/bootstrap/70-update.sh by hand to see the full output."
+                "update failed (exit \(code)). SSH in and re-run /opt/mpd/bootstrap/99-update.sh by hand to see the full output."
             )
         }
 

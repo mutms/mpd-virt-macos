@@ -251,7 +251,7 @@ struct DiagCmd: ParsableCommand {
 struct UpdateCmd: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "update",
-        abstract: "Pull latest mpd source on the VM, rebuild the in-VM `mpd` binary, re-run `mpd --setup`. Runs /opt/mpd/bootstrap/70-update.sh over SSH."
+        abstract: "Pull latest mpd source on the VM, rebuild the in-VM `mpd` binary, re-run `mpd --vm-setup`. Runs /opt/mpd/bootstrap/99-update.sh over SSH."
     )
 
     @Argument(help: "Octet (100–254).")

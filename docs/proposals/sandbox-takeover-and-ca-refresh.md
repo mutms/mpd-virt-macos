@@ -71,7 +71,7 @@ Mac host                                  VM
                                          (overwrite existing)
                                          
   invoke in-VM cert refresh             
-  ──────────────────────────────►       mpd --refresh-trust
+  ──────────────────────────────►       mpd --vm-refresh-trust
                                          (new in-VM verb — see below)
                                          
                                          in-VM steps:
@@ -83,7 +83,7 @@ Mac host                                  VM
                                          4. Re-generate per-project certs
                                             (frontdoor sidecar regenerates
                                              on next podman restart, or via
-                                             explicit `mpd --rotate-certs`)
+                                             explicit `mpd --vm-rotate-certs`)
                                          5. Restart portal + frontdoor
                                             sidecars to pick up new certs
                                          
@@ -105,7 +105,7 @@ Mac host                                  VM
 
 Preconditions:
 - The sandbox VM is running, SSH-reachable from the Mac
-- The sandbox already has `mpd --setup` completed (its own self-issued CA, dnsmasq running, etc.)
+- The sandbox already has `mpd --vm-setup` completed (its own self-issued CA, dnsmasq running, etc.)
 - The Mac has `mpd-virt` installed
 
 Steps:
@@ -145,7 +145,7 @@ separate from CA material).
 
 ## What changes in mpd (in-VM)
 
-A new lifecycle verb: `mpd --refresh-trust`. Implementation:
+A new lifecycle verb: `mpd --vm-refresh-trust`. Implementation:
 
 - Re-run `Mpd.VM.Certificate.trustCA` (system trust store)
 - Re-run NSS DB import (`Mpd.VM.installCAInNSS`)
@@ -156,10 +156,10 @@ A new lifecycle verb: `mpd --refresh-trust`. Implementation:
   the existing frontdoor sidecar's cert path, restart the
   frontdoor sidecar to pick them up
 - Update `/var/lib/mpd/conf/service/rootCA.fingerprint` so the
-  next `mpd --setup`/`mpd --start` sees the new CA correctly
+  next `mpd --vm-setup`/`mpd --vm-start` sees the new CA correctly
 
-This is **`mpd --refresh-trust` as a verb on the in-VM binary**,
-invokable by `mpd-virt` over SSH (`ssh mpd-158 mpd --refresh-trust`)
+This is **`mpd --vm-refresh-trust` as a verb on the in-VM binary**,
+invokable by `mpd-virt` over SSH (`ssh mpd-158 mpd --vm-refresh-trust`)
 or by the dev directly when troubleshooting.
 
 ## What changes in mpd-virt
@@ -171,7 +171,7 @@ orchestrators around:
 1. Generate or reuse the host CA (whatever
    `prepare_host_ca` already does)
 2. Push to VM via scp
-3. `ssh <vm> mpd --refresh-trust`
+3. `ssh <vm> mpd --vm-refresh-trust`
 4. For adopt-sandbox: also rename hostname, configure static IP,
    push WG conf, register the VM in `~/.mpd-virt/<octet>/`
 
@@ -188,7 +188,7 @@ orchestrators around:
    the sandbox CA was never on the Mac in the first place).
 2. **Per-project cert regeneration trigger.** The current frontdoor
    sidecar regenerates certs on first request after CA fingerprint
-   changes. Should `mpd --refresh-trust` pre-warm all projects
+   changes. Should `mpd --vm-refresh-trust` pre-warm all projects
    (visit each to force regeneration) or leave it lazy?
 3. **Trust-import flow on the Mac side.** On macOS, importing a
    new CA into the System keychain requires sudo. Use the existing

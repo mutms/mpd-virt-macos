@@ -19,7 +19,7 @@
 //     waitUntilReachable
 //     40-install-software.sh    — local
 //     50-build.sh               — local
-//     mpd --setup               — initializes the in-VM mpd platform
+//     mpd --vm-setup            — initializes the in-VM mpd platform
 //
 // Output of each step is streamed live to the user's terminal.
 
@@ -123,7 +123,7 @@ extension MpdVirt.Bootstrap.RunInVM {
             mode: 0o644
         )
         // The CA private key needs to land on the VM too — the in-VM
-        // `mpd --setup` uses it to sign service certs for the dnsmasq /
+        // `mpd --vm-setup` uses it to sign service certs for the dnsmasq /
         // portal / adminer / fileaccess containers. Threat model is OK:
         // the CA is name-constrained to *.mpd.test, and a VM-root
         // compromise already implies the attacker has the dev's
@@ -179,8 +179,8 @@ extension MpdVirt.Bootstrap.RunInVM {
 
         try runRemoteScript(
             postRenameTarget,
-            title: "mpd --setup",
-            command: "mpd --setup"
+            title: "mpd --vm-setup",
+            command: "mpd --vm-setup"
         )
 
         step(4, "VM-side bootstrap complete.")
