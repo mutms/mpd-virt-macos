@@ -17,14 +17,14 @@
 //
 //   --- optional (only in interactive mode) ---
 //   6. /etc/resolver/<id>.mpd.test exists and points at this VM's
-//      dnsmasq.
+//      resolver.
 //   7. Routing to this VM's container subnet. Each VM has its own /24,
-//      so reaching 10.163.<id>.3 at all already implies it is this VM's
-//      dnsmasq. We still ask it directly (dig, bypassing /etc/resolver)
+//      so reaching 10.163.<id>.1 at all already implies it is this VM's
+//      resolver. We still ask it directly (dig, bypassing /etc/resolver)
 //      for `vm.service.<zone>` — one packet, and it confirms the answer
 //      comes from the VM we think it does.
 //   8. End-to-end: curl https://<id>.mpd.test/ and read the VM id back
-//      out of the portal's page title — resolver + routing + portal
+//      out of the status page's title — resolver + routing + status page
 //      + CA trust in a single real transaction.
 //   If 7 or 8 fails: walk the dev through the static route that
 //   exposes the container subnet on the Mac. Wait for confirmation;
@@ -125,7 +125,7 @@ extension MpdVirt.Diag {
 
         let vmOctet = entry.octet
         let zone = MpdVirt.Net.zone(octet: vmOctet)
-        let dns = MpdVirt.Net.containerDNS(octet: vmOctet)
+        let dns = MpdVirt.Net.gateway(octet: vmOctet)
         let subnet = MpdVirt.Net.containerSubnet(octet: vmOctet)
         let resolverFile = MpdVirt.Net.resolverFile(octet: vmOctet)
 
@@ -150,12 +150,12 @@ extension MpdVirt.Diag {
             print("        sudo rm -f \(MpdVirt.Net.legacyResolverFile)")
         }
 
-        // This VM's /24 is its own, so a reply from 10.163.<id>.3 can only
-        // be this VM's dnsmasq — cross-VM confusion is structurally
+        // This VM's /24 is its own, so a reply from 10.163.<id>.1 can only
+        // be this VM's resolver — cross-VM confusion is structurally
         // impossible now, where under the old shared 10.163.0.0/24 it was
-        // the normal failure mode. We still ask the dnsmasq we reached who
-        // it is, via `dig` straight at it: one packet, and it proves the
-        // answer came from the VM's own records. dig ignores
+        // the normal failure mode. We still ask the resolver we reached
+        // who it is, via `dig` straight at it: one packet, and it proves
+        // the answer came from the VM's own records. dig ignores
         // /etc/resolver, so this describes the ROUTE, with the resolver
         // config (checked above) factored out.
         section("Routing to \(subnet) (so the resolver can reach \(dns))")
@@ -168,7 +168,7 @@ extension MpdVirt.Diag {
         } else {
             switch dnsmasqIdentity(octet: vmOctet) {
             case .some(let ip) where ip == entry.ip:
-                ok("\(dns) reachable — and it's \(entry.name)'s own dnsmasq (\(entry.ip))")
+                ok("\(dns) reachable — and it's \(entry.name)'s own resolver (\(entry.ip))")
             case .some(let ip):
                 // Can't be another VM: this subnet belongs to this one.
                 // So the registry's record of the VM's LAN IP is stale.
@@ -203,21 +203,23 @@ extension MpdVirt.Diag {
         if !resolverFileLooksRight(octet: vmOctet) || !pingOK(dns) {
             print("    skipped — resolver file or routing still missing (see above)")
         } else {
-            // The real transaction, not a proxy for it: fetch the portal
-            // over HTTPS by name. That exercises, in one shot, every
+            // The real transaction, not a proxy for it: fetch the status
+            // page over HTTPS by name. That exercises, in one shot, every
             // layer the dev actually cares about — /etc/resolver scoping
-            // → dnsmasq → container subnet routing → the portal's Apache
-            // → the mpd Root CA in the System Keychain.
+            // → the VM's resolver → routing to the container subnet →
+            // caddy on the VM and `mpd --web` behind it → the mpd Root CA
+            // in the System Keychain.
             //
             // curl goes through getaddrinfo, same as the user's shell
             // (and unlike `dscacheutil`, which reads the DirectoryServices
             // cache and can keep serving a stale NXDOMAIN long after
             // mDNSResponder already has the right answer).
             //
-            // The portal has no status API, so identity comes from the
-            // page title — mpd renders the VM hostname there, which is
+            // The status page has no API, so identity comes from the page
+            // title — mpd renders the VM hostname there, which is
             // `mpd-NNN`. Ugly, but deterministic and near the top of the
-            // response.
+            // response. mpd's own templates pin that title for exactly
+            // this reason; changing it breaks this check.
             let expectedID = MpdVirt.vmId(octet: entry.octet)
             let portal = portalIdentity(octet: vmOctet)
             let url = "https://\(zone)/"
@@ -234,12 +236,12 @@ extension MpdVirt.Diag {
                     print("    Try: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder")
                 case 7, 28:
                     warn("`curl \(url)` couldn't connect (curl \(portal.exitCode)) — DNS resolves but the portal isn't reachable")
-                    print("    Routing to \(MpdVirt.Net.containerPortal(octet: vmOctet)) (the portal container), or the portal isn't running in \(entry.name).")
+                    print("    Routing to \(dns) (the VM itself, where caddy terminates TLS), or the status page isn't running in \(entry.name).")
                 case 35, 51, 60:
                     warn("`curl \(url)` failed TLS verification (curl \(portal.exitCode)) — '\(MpdVirt.CA.commonName)' isn't trusted by this Mac")
                     print("    See the CA trust section above.")
                 case 0:
-                    warn("`curl \(url)` answered, but the page has no `mpd-NNN` title — is that really the mpd portal?")
+                    warn("`curl \(url)` answered, but the page has no `mpd-NNN` title — is that really the mpd status page?")
                 default:
                     warn("`curl \(url)` failed (curl exit \(portal.exitCode))")
                 }
@@ -282,7 +284,7 @@ extension MpdVirt.Diag {
     }
 
     /// True iff this VM's resolver file exists and contains the expected
-    /// nameserver line. Loose match (any line `nameserver 10.163.<id>.3`)
+    /// nameserver line. Loose match (any line `nameserver 10.163.<id>.1`)
     /// so a hand-edited file with comments or extra options still
     /// passes the check.
     private static func resolverFileLooksRight(octet: Int) -> Bool {
@@ -290,7 +292,7 @@ extension MpdVirt.Diag {
         guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else {
             return false
         }
-        let needle = "nameserver \(MpdVirt.Net.containerDNS(octet: octet))"
+        let needle = "nameserver \(MpdVirt.Net.gateway(octet: octet))"
         return raw.split(whereSeparator: { $0 == "\n" }).contains { line in
             line.trimmingCharacters(in: .whitespaces) == needle
         }
@@ -299,14 +301,14 @@ extension MpdVirt.Diag {
     // MARK: - Probes
     //
     // All probes share a 2-second hard cap. /etc/resolver pointing at
-    // an unreachable dnsmasq makes dscacheutil block for the full
+    // an unreachable resolver makes dscacheutil block for the full
     // 30+ second DNS timeout; ssh likewise blocks on a half-open TCP.
     // Diag is a fast survey — we don't want it to hang.
 
     private static let probeTimeoutSec: Double = 2.0
 
-    /// The portal fetch does a TLS handshake plus a PHP render, so it
-    /// gets a longer leash than the ping/dig probes — but still bounded,
+    /// The status page fetch does a TLS handshake plus a page render, so
+    /// it gets a longer leash than the ping/dig probes — but still bounded,
     /// one second past curl's own --max-time so curl reports the error
     /// itself instead of being SIGKILLed by the wrapper.
     private static let httpProbeTimeoutSec: Double = 4.0
@@ -338,20 +340,19 @@ extension MpdVirt.Diag {
         return r.exitCode == 0 && !r.timedOut
     }
 
-    /// Ask this VM's dnsmasq which VM it belongs to. Returns the IP from
-    /// its `vm.service.<zone>` record (mpd emits
-    /// `host-record=vm.service.<zone>,<MPD_VM_IP>`), or nil if it doesn't
-    /// answer for that name — an older mpd, or a sandbox VM, which skips
-    /// the record because it has no static IP.
+    /// Ask this VM's resolver which VM it belongs to. Returns the IP from
+    /// its `vm.service.<zone>` record, or nil if it doesn't answer for
+    /// that name — an older mpd, or a sandbox VM, which skips the record
+    /// because it has no static IP.
     ///
-    /// `dig` deliberately: it talks to the container DNS directly and
+    /// `dig` deliberately: it talks to the VM's resolver directly and
     /// ignores /etc/resolver, so the answer describes the route with the
     /// resolver config factored out.
     private static func dnsmasqIdentity(octet: Int) -> String? {
         let r = MpdVirt.Host.Ssh.runWithTimeout(
             argv: [
                 "/usr/bin/dig", "+short", "+time=1", "+tries=1",
-                "@\(MpdVirt.Net.containerDNS(octet: octet))",
+                "@\(MpdVirt.Net.gateway(octet: octet))",
                 MpdVirt.Net.vmServiceRecord(octet: octet), "A",
             ],
             timeoutSeconds: probeTimeoutSec
@@ -363,8 +364,8 @@ extension MpdVirt.Diag {
             .first { !$0.isEmpty }
     }
 
-    /// Fetch the portal over HTTPS by name and pull the VM id out of the
-    /// page title (`<title>mpd-NNN</title>` — mpd renders the VM
+    /// Fetch the status page over HTTPS by name and pull the VM id out of
+    /// the page title (`<title>mpd-NNN</title>` — mpd renders the VM
     /// hostname there; there is no status endpoint to ask instead).
     ///
     /// Returns the id when it could be parsed, plus curl's raw exit code

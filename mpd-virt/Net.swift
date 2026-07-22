@@ -6,9 +6,9 @@
 //
 // ── Per-VM addressing ──────────────────────────────────────────────────
 // Every fact here is a function of the VM's octet, because every fact in
-// the VM is too. VM 222 serves `10.163.222.0/24` with dnsmasq on
-// `10.163.222.3` and owns the DNS zone `222.mpd.test`; VM 150 serves
-// `10.163.150.0/24` / `10.163.150.3` / `150.mpd.test`.
+// the VM is too. VM 222 serves `10.163.222.0/24` with its resolver on
+// `10.163.222.1` and owns the DNS zone `222.mpd.test`; VM 150 serves
+// `10.163.150.0/24` / `10.163.150.1` / `150.mpd.test`.
 //
 // That is what lets several VMs be reachable at once. The Mac holds one
 // route and one `/etc/resolver/<id>.mpd.test` file per VM, and they do
@@ -21,8 +21,15 @@
 // change there.
 //
 // Mirrors the layout mpd uses inside the VM: the host part of an address
-// never moves (dnsmasq always `.3`, portal always `.4`), only the third
-// octet varies, and it always equals the VM ID.
+// never moves, only the third octet varies, and it always equals the VM
+// ID.
+//
+// Everything this Mac talks to is at `.1`, the podman bridge gateway —
+// which is the VM itself, not a container. mpd runs the resolver and the
+// TLS frontdoor there as systemd units. They used to be containers on
+// `.3` and `.4`; both moved onto the VM, and `.3`/`.4`/`.5` are now
+// unassigned. A Mac still pointing at `.3` gets no answer at all: the
+// address is simply unused, so lookups fail rather than resolve wrongly.
 
 import Foundation
 
@@ -42,8 +49,12 @@ extension MpdVirt.Net {
 
     /// Host octets with a fixed meaning inside every VM's /24.
     enum Host {
-        static let dnsmasq = 3
-        static let portal = 4
+        /// The podman bridge gateway — the VM itself. Everything mpd
+        /// serves from the VM rather than from a container answers here:
+        /// dnsmasq on :53, and caddy on :443 fronting the status page and
+        /// adminer. One address, so the Mac needs one route and one
+        /// resolver entry.
+        static let gateway = 1
     }
 
     // MARK: - Per-VM facts
@@ -61,21 +72,22 @@ extension MpdVirt.Net {
         "\(subnetPrefix).\(octet).0/24"
     }
 
-    /// Compose a container address from its host octet:
-    /// `ip(octet: 150, host: Host.portal)` → `10.163.150.4`.
+    /// Compose an address on this VM's subnet from its host octet:
+    /// `ip(octet: 150, host: Host.gateway)` → `10.163.150.1`.
     static func ip(octet: Int, host: Int) -> String {
         "\(subnetPrefix).\(octet).\(host)"
     }
 
-    /// This VM's dnsmasq — authoritative for its zone, and the
-    /// nameserver the scoped resolver file points at.
-    static func containerDNS(octet: Int) -> String {
-        ip(octet: octet, host: Host.dnsmasq)
-    }
-
-    /// This VM's portal container.
-    static func containerPortal(octet: Int) -> String {
-        ip(octet: octet, host: Host.portal)
+    /// This VM, as seen from its own container subnet: the bridge
+    /// gateway. It is the nameserver the scoped resolver file points at,
+    /// the address the zone apex resolves to, and the only address on
+    /// this subnet the Mac ever needs to talk to directly.
+    ///
+    /// One function rather than a `dns` and a `portal` accessor, because
+    /// there is genuinely one address now — separate names would only
+    /// suggest they could differ.
+    static func gateway(octet: Int) -> String {
+        ip(octet: octet, host: Host.gateway)
     }
 
     /// The scoped resolver file for this VM: `/etc/resolver/150.mpd.test`.
@@ -93,9 +105,10 @@ extension MpdVirt.Net {
         "\(runtime).runtime.\(zone(octet: octet))"
     }
 
-    /// `vm.service.<zone>` — the diagnostic record mpd's dnsmasq serves,
-    /// answering with the VM's own LAN IP rather than a container
-    /// address. Used by `diag` to confirm the route lands where intended.
+    /// `vm.service.<zone>` — the diagnostic record mpd's resolver serves,
+    /// answering with the VM's own LAN IP rather than an address on the
+    /// container subnet. Used by `diag` to confirm the route lands where
+    /// intended.
     static func vmServiceRecord(octet: Int) -> String {
         "vm.service.\(zone(octet: octet))"
     }

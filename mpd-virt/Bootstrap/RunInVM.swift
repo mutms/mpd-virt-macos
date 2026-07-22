@@ -123,8 +123,9 @@ extension MpdVirt.Bootstrap.RunInVM {
             mode: 0o644
         )
         // The CA private key needs to land on the VM too — the in-VM
-        // `mpd --vm-setup` uses it to sign service certs for the dnsmasq /
-        // portal / adminer / fileaccess containers. Threat model is OK:
+        // `mpd --vm-setup` uses it to sign the service certificate caddy
+        // serves the zone apex and adminer with, and a leaf cert per
+        // project. Threat model is OK:
         // the CA is name-constrained to *.mpd.test, and a VM-root
         // compromise already implies the attacker has the dev's
         // privileges inside the VM, so the marginal exposure is small.
